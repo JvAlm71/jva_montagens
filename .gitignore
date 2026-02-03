@@ -1,0 +1,58 @@
+# ========== BACKEND (Java/Spring Boot/Gradle) ==========
+# Build directories
+backend/build/
+backend/.gradle/
+backend/target/
+
+# Compiled classes
+*.class
+*.jar
+*.war
+*.zip
+*.tar.gz
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Environment & local configs
+.env
+.env.local
+*.properties.local
+
+# Runtime/temp files
+*.log
+*.pid
+
+# ========== FRONTEND (Next.js) ==========
+# Dependencies
+frontend/node_modules/
+
+# Next.js
+frontend/.next/
+frontend/out/
+
+# npm logs
+frontend/npm-debug.log*
+frontend/yarn-error.log*
+
+# Environment variables
+frontend/.env.local
+frontend/.env.*.local
+
+# IDEs
+frontend/.vscode/
+frontend/.idea/
+
+# ========== GERAL ==========
+tmp/
+temp/
+*.tmp
+.cache/

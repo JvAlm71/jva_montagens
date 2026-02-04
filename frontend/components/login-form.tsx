@@ -1,8 +1,8 @@
 "use client"
 
 import React from "react"
-
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { Eye, EyeOff, Lock, Mail, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 
 export function LoginForm() {
+  const router = useRouter()
   const [showPassword, setShowPassword] = useState(false)
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -21,6 +22,8 @@ export function LoginForm() {
     // Simula autenticação
     await new Promise((resolve) => setTimeout(resolve, 1500))
     setIsLoading(false)
+    // Redireciona para o dashboard
+    router.push("/dashboard")
   }
 
   return (

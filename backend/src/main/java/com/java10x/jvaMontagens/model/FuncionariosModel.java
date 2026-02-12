@@ -9,8 +9,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "clients")
-public class ClientModel {
+@Table(name = "funcionarios")
+public class FuncionariosModel {
     @Id
     @Column(name = "cpf", length = 11, nullable = false, unique = true)
     private Long cpf;

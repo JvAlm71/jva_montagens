@@ -9,9 +9,9 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "clients")
-public class ClientModel {
+@Table(name = "financials")
+public class FinancialModel {
     @Id
-    @Column(name = "cpf", length = 11, nullable = false, unique = true)
-    private Long cpf;
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
 }

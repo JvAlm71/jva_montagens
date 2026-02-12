@@ -1,29 +1,49 @@
 "use client"
 
 import React from "react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Eye, EyeOff, Lock, Mail, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
+import { ApiError, loginAdmin } from "@/lib/api"
+import { getToken, saveSession } from "@/lib/auth-session"
 
 export function LoginForm() {
   const router = useRouter()
   const [showPassword, setShowPassword] = useState(false)
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [remember, setRemember] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (getToken()) {
+      router.replace("/dashboard")
+    }
+  }, [router])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setError(null)
     setIsLoading(true)
-    // Simula autenticação
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    setIsLoading(false)
-    // Redireciona para o dashboard
-    router.push("/dashboard")
+
+    try {
+      const session = await loginAdmin(email, password)
+      saveSession(session, remember)
+      router.push("/dashboard")
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(err.message)
+      } else {
+        setError("Nao foi possivel realizar login.")
+      }
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -93,7 +113,11 @@ export function LoginForm() {
 
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Checkbox id="remember" />
+            <Checkbox
+              id="remember"
+              checked={remember}
+              onCheckedChange={(checked) => setRemember(Boolean(checked))}
+            />
             <Label
               htmlFor="remember"
               className="text-sm font-normal text-muted-foreground cursor-pointer"
@@ -123,6 +147,10 @@ export function LoginForm() {
             "Entrar"
           )}
         </Button>
+
+        {error && (
+          <p className="text-sm font-medium text-red-500">{error}</p>
+        )}
       </form>
 
       {/* Rodapé */}

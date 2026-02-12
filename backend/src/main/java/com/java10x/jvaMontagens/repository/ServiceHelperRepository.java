@@ -1,11 +1,9 @@
 package com.java10x.jvaMontagens.repository;
 
+import com.java10x.jvaMontagens.model.ServiceHelperModel;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
-import com.java10x.jvaMontagens.model.ClientModel;
 
 @Repository
-public interface ClientRepository extends JpaRepository<ClientModel, String> {
-
-
+public interface ServiceHelperRepository extends JpaRepository<ServiceHelperModel, Long> {
 }

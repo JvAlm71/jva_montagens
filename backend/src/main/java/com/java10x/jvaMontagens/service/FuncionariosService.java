@@ -5,6 +5,7 @@ import com.java10x.jvaMontagens.model.JobRole;
 import com.java10x.jvaMontagens.model.UserModel;
 import com.java10x.jvaMontagens.repository.FuncionarioRepository;
 import com.java10x.jvaMontagens.repository.UserRepository;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -16,38 +17,43 @@ import java.util.NoSuchElementException;
 public class FuncionariosService {
     private final FuncionarioRepository funcionarioRepository;
     private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
 
-    public FuncionariosService(FuncionarioRepository funcionarioRepository, UserRepository userRepository) {
+    public FuncionariosService(FuncionarioRepository funcionarioRepository, UserRepository userRepository, PasswordEncoder passwordEncoder) {
         this.funcionarioRepository = funcionarioRepository;
         this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
     }
 
-    public FuncionariosModel createFuncionario(FuncionariosModel funcionario, String userCpf) {
+    public FuncionariosModel createFuncionario(FuncionariosModel funcionario) {
         sanitizeAndValidate(funcionario);
         if (funcionario.getActive() == null) funcionario.setActive(true);
-        attachUserIfProvided(funcionario, userCpf);
+
+        if (funcionario.getRole() == JobRole.ADMINISTRATOR) {
+            syncAdminUser(funcionario);
+        }
 
         return funcionarioRepository.save(funcionario);
     }
 
-    public FuncionariosModel updateFuncionario(Long id, FuncionariosModel updates, String userCpf) {
+    public FuncionariosModel updateFuncionario(Long id, FuncionariosModel updates) {
         FuncionariosModel existing = getById(id);
 
         if (updates.getName() != null) existing.setName(updates.getName());
         if (updates.getPixKey() != null) existing.setPixKey(updates.getPixKey());
         if (updates.getGovEmail() != null) existing.setGovEmail(updates.getGovEmail());
         if (updates.getGovPassword() != null) existing.setGovPassword(updates.getGovPassword());
+        if (updates.getCpf() != null) existing.setCpf(updates.getCpf());
         if (updates.getRole() != null) existing.setRole(updates.getRole());
         if (updates.getDailyRate() != null) existing.setDailyRate(updates.getDailyRate());
         if (updates.getPricePerMeter() != null) existing.setPricePerMeter(updates.getPricePerMeter());
         if (updates.getActive() != null) existing.setActive(updates.getActive());
 
-        if (userCpf != null) {
-            if (userCpf.isBlank()) {
-                existing.setUser(null);
-            } else {
-                attachUserIfProvided(existing, userCpf);
-            }
+        if (existing.getRole() == JobRole.ADMINISTRATOR) {
+            syncAdminUser(existing);
+        } else {
+            // Removido de administrador: desvincula o usuario de login
+            existing.setUser(null);
         }
 
         sanitizeAndValidate(existing);
@@ -89,6 +95,13 @@ public class FuncionariosService {
         funcionario.setGovEmail(govEmail == null ? null : govEmail.toLowerCase(Locale.ROOT));
         funcionario.setGovPassword(normalizeNullable(funcionario.getGovPassword()));
 
+        // Normalize CPF if provided
+        String cpf = normalizeNullable(funcionario.getCpf());
+        if (cpf != null) {
+            cpf = cpf.replaceAll("\\D", "");
+        }
+        funcionario.setCpf(cpf);
+
         validateNonNegative(funcionario.getDailyRate(), "dailyRate");
         validateNonNegative(funcionario.getPricePerMeter(), "pricePerMeter");
         validateRoleCompensation(funcionario);
@@ -115,12 +128,47 @@ public class FuncionariosService {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    private void attachUserIfProvided(FuncionariosModel funcionario, String userCpf) {
-        if (userCpf == null || userCpf.isBlank()) return;
+    /**
+     * When an ADMINISTRATOR employee has govEmail, govPassword and a linked User (CPF),
+     * automatically sync the User record so govEmail becomes the login email
+     * and govPassword becomes the login password.
+     */
+    private void syncAdminUser(FuncionariosModel funcionario) {
+        if (funcionario.getRole() != JobRole.ADMINISTRATOR) return;
 
-        String normalizedCpf = DocumentUtils.normalizeCpf(userCpf);
-        UserModel user = userRepository.findById(normalizedCpf)
-                .orElseThrow(() -> new NoSuchElementException("User not found for CPF " + normalizedCpf));
+        String govEmail = funcionario.getGovEmail();
+        String govPassword = funcionario.getGovPassword();
+        if (govEmail == null || govEmail.isBlank()) return;
+        if (govPassword == null || govPassword.isBlank()) return;
+
+        String cpf = funcionario.getCpf();
+        if (cpf == null || cpf.isBlank()) return;
+
+        String normalizedCpf = DocumentUtils.normalizeCpf(cpf);
+        String encodedPassword = encodePasswordIfNeeded(govPassword);
+
+        UserModel user = userRepository.findById(normalizedCpf).orElse(null);
+        if (user == null) {
+            user = new UserModel();
+            user.setCpf(normalizedCpf);
+            user.setFullName(funcionario.getName());
+            user.setEmail(govEmail);
+            user.setPassword(encodedPassword);
+            userRepository.save(user);
+        } else {
+            user.setEmail(govEmail);
+            user.setPassword(encodedPassword);
+            user.setFullName(funcionario.getName());
+            userRepository.save(user);
+        }
+        // Sempre vincula o User ao funcionario apos criar/atualizar
         funcionario.setUser(user);
+    }
+
+    private String encodePasswordIfNeeded(String password) {
+        if (password.startsWith("$2a$") || password.startsWith("$2b$") || password.startsWith("$2y$")) {
+            return password;
+        }
+        return passwordEncoder.encode(password);
     }
 }

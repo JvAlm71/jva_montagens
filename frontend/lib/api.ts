@@ -104,6 +104,7 @@ export type Employee = {
   pixKey?: string | null
   govEmail?: string | null
   govPassword?: string | null
+  cpf?: string | null
   role: JobRole
   dailyRate?: number | null
   pricePerMeter?: number | null
@@ -280,10 +281,10 @@ export async function createEmployee(
     pixKey?: string
     govEmail?: string
     govPassword?: string
+    cpf?: string
     role: JobRole
     dailyRate?: number
     pricePerMeter?: number
-    userCpf?: string
     active?: boolean
   }
 ): Promise<Employee> {
@@ -302,10 +303,10 @@ export async function updateEmployee(
     pixKey?: string
     govEmail?: string
     govPassword?: string
+    cpf?: string
     role?: JobRole
     dailyRate?: number
     pricePerMeter?: number
-    userCpf?: string
     active?: boolean
   }
 ): Promise<Employee> {

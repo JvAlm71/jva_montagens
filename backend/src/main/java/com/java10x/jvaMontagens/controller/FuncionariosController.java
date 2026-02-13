@@ -29,11 +29,12 @@ public class FuncionariosController {
             funcionario.setPixKey(request.pixKey());
             funcionario.setGovEmail(request.govEmail());
             funcionario.setGovPassword(request.govPassword());
+            funcionario.setCpf(request.cpf());
             funcionario.setRole(request.role());
             funcionario.setDailyRate(request.dailyRate());
             funcionario.setPricePerMeter(request.pricePerMeter());
             funcionario.setActive(request.active() == null || request.active());
-            return funcionariosService.createFuncionario(funcionario, request.userCpf());
+            return funcionariosService.createFuncionario(funcionario);
         } catch (IllegalArgumentException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
         } catch (NoSuchElementException ex) {
@@ -69,11 +70,12 @@ public class FuncionariosController {
             updates.setPixKey(request.pixKey());
             updates.setGovEmail(request.govEmail());
             updates.setGovPassword(request.govPassword());
+            updates.setCpf(request.cpf());
             updates.setRole(request.role());
             updates.setDailyRate(request.dailyRate());
             updates.setPricePerMeter(request.pricePerMeter());
             updates.setActive(request.active());
-            return funcionariosService.updateFuncionario(id, updates, request.userCpf());
+            return funcionariosService.updateFuncionario(id, updates);
         } catch (IllegalArgumentException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
         } catch (NoSuchElementException ex) {
@@ -86,10 +88,10 @@ public class FuncionariosController {
             String pixKey,
             String govEmail,
             String govPassword,
+            String cpf,
             JobRole role,
             BigDecimal dailyRate,
             BigDecimal pricePerMeter,
-            String userCpf,
             Boolean active
     ) {}
 
@@ -98,10 +100,10 @@ public class FuncionariosController {
             String pixKey,
             String govEmail,
             String govPassword,
+            String cpf,
             JobRole role,
             BigDecimal dailyRate,
             BigDecimal pricePerMeter,
-            String userCpf,
             Boolean active
     ) {}
 }

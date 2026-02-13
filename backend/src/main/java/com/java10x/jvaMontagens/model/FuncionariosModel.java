@@ -31,6 +31,9 @@ public class FuncionariosModel {
 
     @Column(name = "gov_password", length = 200)
     private String govPassword;
+
+    @Column(length = 14)
+    private String cpf;
     
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -45,7 +48,6 @@ public class FuncionariosModel {
     @Column(nullable = false)
     private Boolean active = true;
 
-    @JsonIgnore
     @OneToOne
     @JoinColumn(name = "user_cpf", referencedColumnName = "cpf", unique = true)
     private UserModel user;

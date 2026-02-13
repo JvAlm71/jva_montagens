@@ -37,11 +37,11 @@ function emptyEmployeeForm() {
     name: "",
     role: "ASSEMBLER" as JobRole,
     pixKey: "",
+    cpf: "",
     govEmail: "",
     govPassword: "",
     dailyRate: "",
     pricePerMeter: "",
-    userCpf: "",
     active: true,
   }
 }
@@ -97,11 +97,11 @@ export default function EmployeesPage() {
         name: form.name,
         role: form.role,
         pixKey: form.pixKey || undefined,
+        cpf: form.cpf || undefined,
         govEmail: form.govEmail || undefined,
         govPassword: form.govPassword || undefined,
         dailyRate: parseOptionalNumber(form.dailyRate),
         pricePerMeter: parseOptionalNumber(form.pricePerMeter),
-        userCpf: form.userCpf || undefined,
         active: form.active,
       })
       setForm(emptyEmployeeForm())
@@ -119,11 +119,11 @@ export default function EmployeesPage() {
       name: employee.name,
       role: employee.role,
       pixKey: employee.pixKey || "",
+      cpf: employee.cpf || "",
       govEmail: employee.govEmail || "",
       govPassword: employee.govPassword || "",
       dailyRate: employee.dailyRate != null ? String(employee.dailyRate) : "",
       pricePerMeter: employee.pricePerMeter != null ? String(employee.pricePerMeter) : "",
-      userCpf: employee.user?.cpf || "",
       active: employee.active,
     })
   }
@@ -139,11 +139,11 @@ export default function EmployeesPage() {
         name: editForm.name,
         role: editForm.role,
         pixKey: editForm.pixKey || undefined,
+        cpf: editForm.cpf || undefined,
         govEmail: editForm.govEmail || undefined,
         govPassword: editForm.govPassword || undefined,
         dailyRate: parseOptionalNumber(editForm.dailyRate),
         pricePerMeter: parseOptionalNumber(editForm.pricePerMeter),
-        userCpf: editForm.userCpf,
         active: editForm.active,
       })
       setEditingId(null)
@@ -253,17 +253,22 @@ export default function EmployeesPage() {
                 <Input type="number" step="0.01" value={form.pricePerMeter} onChange={(e) => setForm((p) => ({ ...p, pricePerMeter: e.target.value }))} required={form.role === "LEADER"} />
               </div>
               <div className="space-y-1">
-                <Label>CPF Usuario (opcional)</Label>
-                <Input value={form.userCpf} onChange={(e) => setForm((p) => ({ ...p, userCpf: e.target.value }))} placeholder="00000000000" />
+                <Label>CPF{form.role === "ADMINISTRATOR" ? " (obrigatório para login)" : ""}</Label>
+                <Input value={form.cpf} onChange={(e) => setForm((p) => ({ ...p, cpf: e.target.value }))} placeholder="00000000000" required={form.role === "ADMINISTRATOR"} />
               </div>
               <div className="space-y-1 lg:col-span-2">
-                <Label>Email Gov</Label>
-                <Input type="email" value={form.govEmail} onChange={(e) => setForm((p) => ({ ...p, govEmail: e.target.value }))} />
+                <Label>Email Gov {form.role === "ADMINISTRATOR" ? "(usado para login no sistema)" : ""}</Label>
+                <Input type="email" value={form.govEmail} onChange={(e) => setForm((p) => ({ ...p, govEmail: e.target.value }))} required={form.role === "ADMINISTRATOR"} />
               </div>
               <div className="space-y-1 lg:col-span-2">
-                <Label>Senha Gov</Label>
-                <Input value={form.govPassword} onChange={(e) => setForm((p) => ({ ...p, govPassword: e.target.value }))} />
+                <Label>Senha Gov {form.role === "ADMINISTRATOR" ? "(usada para login no sistema)" : ""}</Label>
+                <Input value={form.govPassword} onChange={(e) => setForm((p) => ({ ...p, govPassword: e.target.value }))} required={form.role === "ADMINISTRATOR"} />
               </div>
+              {form.role === "ADMINISTRATOR" && (
+                <p className="text-xs text-muted-foreground lg:col-span-4">
+                  Para administradores, o Email Gov e a Senha Gov serão usados como credenciais de acesso ao sistema. O CPF é obrigatório.
+                </p>
+              )}
               <div className="lg:col-span-4">
                 <Button type="submit" className="w-full gap-2">
                   <Plus className="h-4 w-4" />
@@ -298,9 +303,9 @@ export default function EmployeesPage() {
                         <Input value={editForm.pixKey} onChange={(e) => setEditForm((p) => ({ ...p, pixKey: e.target.value }))} placeholder="PIX" />
                         <Input type="number" step="0.01" value={editForm.dailyRate} onChange={(e) => setEditForm((p) => ({ ...p, dailyRate: e.target.value }))} placeholder="Diaria" required={editForm.role === "ASSEMBLER"} />
                         <Input type="number" step="0.01" value={editForm.pricePerMeter} onChange={(e) => setEditForm((p) => ({ ...p, pricePerMeter: e.target.value }))} placeholder="Preco m2" required={editForm.role === "LEADER"} />
-                        <Input value={editForm.userCpf} onChange={(e) => setEditForm((p) => ({ ...p, userCpf: e.target.value }))} placeholder="CPF usuario (vazio remove)" />
-                        <Input type="email" value={editForm.govEmail} onChange={(e) => setEditForm((p) => ({ ...p, govEmail: e.target.value }))} placeholder="Email gov" />
-                        <Input value={editForm.govPassword} onChange={(e) => setEditForm((p) => ({ ...p, govPassword: e.target.value }))} placeholder="Senha gov" />
+                        <Input value={editForm.cpf} onChange={(e) => setEditForm((p) => ({ ...p, cpf: e.target.value }))} placeholder="CPF" required={editForm.role === "ADMINISTRATOR"} />
+                        <Input type="email" value={editForm.govEmail} onChange={(e) => setEditForm((p) => ({ ...p, govEmail: e.target.value }))} placeholder={editForm.role === "ADMINISTRATOR" ? "Email Gov (login)" : "Email gov"} required={editForm.role === "ADMINISTRATOR"} />
+                        <Input value={editForm.govPassword} onChange={(e) => setEditForm((p) => ({ ...p, govPassword: e.target.value }))} placeholder={editForm.role === "ADMINISTRATOR" ? "Senha Gov (login)" : "Senha gov"} required={editForm.role === "ADMINISTRATOR"} />
                         <select className="h-9 rounded-md border border-input bg-background px-2 text-sm" value={editForm.active ? "true" : "false"} onChange={(e) => setEditForm((p) => ({ ...p, active: e.target.value === "true" }))}>
                           <option value="true">ATIVO</option>
                           <option value="false">INATIVO</option>
@@ -324,7 +329,7 @@ export default function EmployeesPage() {
                           <p className="text-sm text-muted-foreground">Preco m2: {formatCurrency(employee.pricePerMeter)}</p>
                           <p className="text-sm text-muted-foreground">Email Gov: {employee.govEmail || "-"}</p>
                           <p className="text-sm text-muted-foreground">Senha Gov: {employee.govPassword || "-"}</p>
-                          <p className="text-sm text-muted-foreground">CPF Usuario: {employee.user?.cpf || "-"}</p>
+                          <p className="text-sm text-muted-foreground">CPF: {employee.cpf || "-"}</p>
                         </div>
                         <Button size="sm" variant="ghost" onClick={() => startEdit(employee)}>
                           <Pencil className="h-4 w-4" />

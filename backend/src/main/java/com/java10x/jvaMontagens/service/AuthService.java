@@ -75,7 +75,7 @@ public class AuthService {
 
         return new AuthUser(
                 user.getCpf(),
-                user.getEmail(),
+                administrator.getGovEmail() != null ? administrator.getGovEmail() : user.getEmail(),
                 user.getFullName(),
                 administrator.getId(),
                 administrator.getName(),

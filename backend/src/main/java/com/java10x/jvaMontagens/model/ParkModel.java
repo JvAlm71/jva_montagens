@@ -36,4 +36,8 @@ public class ParkModel {
     @JsonIgnore
     @OneToMany(mappedBy = "park", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<FinancialModel> financialPeriods = new ArrayList<>();
+
+    @JsonIgnore
+    @OneToMany(mappedBy = "park", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<ParkMediaModel> mediaFiles = new ArrayList<>();
 }

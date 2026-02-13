@@ -96,6 +96,16 @@ export type Park = {
   client: Client
 }
 
+export type ParkMedia = {
+  id: number
+  parkId: number
+  parkName: string
+  fileName: string
+  contentType: string
+  fileSize: number
+  uploadedAt: string
+}
+
 export type JobRole = "ADMINISTRATOR" | "LEADER" | "ASSEMBLER"
 
 export type Employee = {
@@ -381,6 +391,70 @@ export async function updatePark(
 
 export async function deletePark(token: string, parkId: number): Promise<void> {
   return request<void>(`/parks/${parkId}`, {
+    method: "DELETE",
+    token,
+  })
+}
+
+export async function getParkMedia(token: string, parkId: number): Promise<ParkMedia[]> {
+  return request<ParkMedia[]>(`/parks/${parkId}/media`, { token })
+}
+
+export async function uploadParkMedia(
+  token: string,
+  parkId: number,
+  files: File[]
+): Promise<ParkMedia[]> {
+  const formData = new FormData()
+  for (const file of files) {
+    formData.append("files", file)
+  }
+
+  const response = await fetch(`${API_BASE_URL}/parks/${parkId}/media`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
+    cache: "no-store",
+  })
+
+  if (!response.ok) {
+    throw await parseApiError(response)
+  }
+
+  return (await response.json()) as ParkMedia[]
+}
+
+export async function downloadParkMedia(
+  token: string,
+  mediaId: number
+): Promise<{ blob: Blob; fileName: string }> {
+  const response = await fetch(`${API_BASE_URL}/parks/media/${mediaId}/download`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    cache: "no-store",
+  })
+
+  if (!response.ok) {
+    throw await parseApiError(response)
+  }
+
+  const blob = await response.blob()
+  const contentDisposition = response.headers.get("content-disposition")
+  const utf8Match = contentDisposition?.match(/filename\*=UTF-8''([^;]+)/i)
+  const asciiMatch = contentDisposition?.match(/filename="?([^"]+)"?/i)
+  const fileName = utf8Match?.[1]
+    ? decodeURIComponent(utf8Match[1])
+    : asciiMatch?.[1] || `park-media-${mediaId}`
+
+  return { blob, fileName }
+}
+
+export async function deleteParkMedia(token: string, mediaId: number): Promise<void> {
+  return request<void>(`/parks/media/${mediaId}`, {
     method: "DELETE",
     token,
   })

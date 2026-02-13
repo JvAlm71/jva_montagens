@@ -50,11 +50,33 @@ function formatCurrency(value: number) {
 }
 
 function formatDate(value: string) {
+  const isoLocalDate = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (isoLocalDate) {
+    const year = Number(isoLocalDate[1])
+    const month = Number(isoLocalDate[2]) - 1
+    const day = Number(isoLocalDate[3])
+    return new Intl.DateTimeFormat("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).format(new Date(year, month, day))
+  }
+
   return new Intl.DateTimeFormat("pt-BR", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
   }).format(new Date(value))
+}
+
+function normalizeDateInput(value?: string | null) {
+  if (!value) return ""
+  const trimmed = value.trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed
+  if (trimmed.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+    return trimmed.slice(0, 10)
+  }
+  return ""
 }
 
 const SERVICE_TYPE_LABELS: Record<ServiceType, string> = {
@@ -566,8 +588,8 @@ export default function FinancialPage() {
       meters: service.meters,
       unitPrice: service.unitPrice,
       notes: service.notes || "",
-      startDate: service.startDate || "",
-      endDate: service.endDate || "",
+      startDate: normalizeDateInput(service.startDate),
+      endDate: normalizeDateInput(service.endDate),
     })
   }
 
@@ -618,7 +640,7 @@ export default function FinancialPage() {
   const startEditPayment = (payment: PaymentEntry) => {
     setEditingPaymentId(payment.id)
     setEditPaymentForm({
-      paymentDate: payment.paymentDate,
+      paymentDate: normalizeDateInput(payment.paymentDate),
       name: payment.name,
       amount: payment.amount,
       category: payment.category,

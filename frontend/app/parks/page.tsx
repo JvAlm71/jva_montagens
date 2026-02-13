@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
-import { Building2, LogOut, Pencil, Plus, RefreshCcw, Trash2, X, Zap } from "lucide-react"
+import { Building2, Download, LogOut, Pencil, Plus, RefreshCcw, Trash2, Upload, X, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -13,14 +13,19 @@ import {
   createClient,
   createPark,
   deleteClient,
+  deleteParkMedia,
   deletePark,
+  downloadParkMedia,
   getClients,
+  getParkMedia,
   getParkOverview,
   getParks,
+  uploadParkMedia,
   updateClient,
   updatePark,
   type Client,
   type Park,
+  type ParkMedia,
   type ParkFinancialOverview,
 } from "@/lib/api"
 
@@ -32,11 +37,30 @@ function formatCurrency(value: number) {
   }).format(value)
 }
 
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value))
+}
+
+function formatFileSize(size: number) {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
 export default function ParksPage() {
   const { token, isCheckingAuth, logout } = useAuthGuard()
   const [clients, setClients] = useState<Client[]>([])
   const [parks, setParks] = useState<Park[]>([])
   const [overviews, setOverviews] = useState<Record<number, ParkFinancialOverview>>({})
+  const [mediaByPark, setMediaByPark] = useState<Record<number, ParkMedia[]>>({})
+  const [selectedMediaFilesByPark, setSelectedMediaFilesByPark] = useState<Record<number, File[]>>({})
+  const [uploadingParkId, setUploadingParkId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -75,18 +99,31 @@ export default function ParksPage() {
           getParks(token),
         ])
 
-        const fetchedOverviews = await Promise.all(
-          fetchedParks.map((park) => getParkOverview(token, park.id))
-        )
+        const [fetchedOverviews, fetchedMediaByPark] = await Promise.all([
+          Promise.all(fetchedParks.map((park) => getParkOverview(token, park.id))),
+          Promise.all(
+            fetchedParks.map(async (park) => ({
+              parkId: park.id,
+              media: await getParkMedia(token, park.id),
+            }))
+          ),
+        ])
 
         const overviewMap: Record<number, ParkFinancialOverview> = {}
         for (const overview of fetchedOverviews) {
           overviewMap[overview.parkId] = overview
         }
 
+        const mediaMap: Record<number, ParkMedia[]> = {}
+        for (const entry of fetchedMediaByPark) {
+          mediaMap[entry.parkId] = entry.media
+        }
+
         setClients(fetchedClients)
         setParks(fetchedParks)
         setOverviews(overviewMap)
+        setMediaByPark(mediaMap)
+        setSelectedMediaFilesByPark({})
 
         if (!parkForm.clientCnpj && fetchedClients.length > 0) {
           setParkForm((prev) => ({ ...prev, clientCnpj: fetchedClients[0].cnpj }))
@@ -246,6 +283,74 @@ export default function ParksPage() {
     } catch (err) {
       if (err instanceof ApiError) setError(err.message)
       else setError("Falha ao excluir parque.")
+    }
+  }
+
+  const handleParkMediaFileSelection = (parkId: number, fileList: FileList | null) => {
+    const files = fileList ? Array.from(fileList) : []
+    setSelectedMediaFilesByPark((prev) => ({ ...prev, [parkId]: files }))
+  }
+
+  const handleUploadParkMedia = async (parkId: number) => {
+    if (!token) return
+    const selectedFiles = selectedMediaFilesByPark[parkId] || []
+    if (selectedFiles.length === 0) {
+      setError("Selecione ao menos um arquivo de imagem ou video para upload.")
+      return
+    }
+
+    try {
+      setError(null)
+      setMessage(null)
+      setUploadingParkId(parkId)
+
+      await uploadParkMedia(token, parkId, selectedFiles)
+      const refreshedMedia = await getParkMedia(token, parkId)
+      setMediaByPark((prev) => ({ ...prev, [parkId]: refreshedMedia }))
+      setSelectedMediaFilesByPark((prev) => ({ ...prev, [parkId]: [] }))
+      setMessage("Arquivos enviados com sucesso.")
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message)
+      else setError("Falha ao enviar arquivos do parque.")
+    } finally {
+      setUploadingParkId(null)
+    }
+  }
+
+  const handleDownloadParkMedia = async (mediaId: number) => {
+    if (!token) return
+    try {
+      setError(null)
+      const { blob, fileName } = await downloadParkMedia(token, mediaId)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement("a")
+      anchor.href = url
+      anchor.download = fileName
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message)
+      else setError("Falha ao baixar arquivo.")
+    }
+  }
+
+  const handleDeleteParkMedia = async (parkId: number, mediaId: number) => {
+    if (!token) return
+    if (!confirm("Excluir este arquivo de midia?")) return
+    try {
+      setError(null)
+      setMessage(null)
+      await deleteParkMedia(token, mediaId)
+      setMediaByPark((prev) => ({
+        ...prev,
+        [parkId]: (prev[parkId] || []).filter((item) => item.id !== mediaId),
+      }))
+      setMessage("Arquivo de midia removido com sucesso.")
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message)
+      else setError("Falha ao excluir arquivo de midia.")
     }
   }
 
@@ -618,6 +723,84 @@ export default function ParksPage() {
                               <p className="font-semibold text-foreground">
                                 {overview?.totalPeriods || 0}
                               </p>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 rounded-md border border-dashed border-border p-3">
+                            <p className="text-sm font-medium text-foreground">Registro de Midia do Parque</p>
+                            <p className="text-xs text-muted-foreground">
+                              Anexe varias fotos e videos para manter o historico visual do projeto.
+                            </p>
+
+                            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                              <Input
+                                type="file"
+                                accept="image/*,video/*"
+                                multiple
+                                onChange={(event) =>
+                                  handleParkMediaFileSelection(park.id, event.target.files)
+                                }
+                              />
+                              <Button
+                                type="button"
+                                size="sm"
+                                className="gap-2"
+                                onClick={() => handleUploadParkMedia(park.id)}
+                                disabled={
+                                  uploadingParkId === park.id ||
+                                  (selectedMediaFilesByPark[park.id] || []).length === 0
+                                }
+                              >
+                                <Upload className="h-4 w-4" />
+                                {uploadingParkId === park.id ? "Enviando..." : "Enviar"}
+                              </Button>
+                            </div>
+
+                            {(selectedMediaFilesByPark[park.id] || []).length > 0 && (
+                              <p className="mt-2 text-xs text-muted-foreground">
+                                {(selectedMediaFilesByPark[park.id] || []).length} arquivo(s) selecionado(s).
+                              </p>
+                            )}
+
+                            <div className="mt-3">
+                              {(mediaByPark[park.id] || []).length === 0 ? (
+                                <p className="text-xs text-muted-foreground">Nenhuma midia anexada para este parque.</p>
+                              ) : (
+                                <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+                                  {(mediaByPark[park.id] || []).map((media) => (
+                                    <div
+                                      key={media.id}
+                                      className="flex items-center justify-between rounded-md border border-border px-3 py-2"
+                                    >
+                                      <div className="min-w-0">
+                                        <p className="truncate text-sm font-medium text-foreground">{media.fileName}</p>
+                                        <p className="text-xs text-muted-foreground">
+                                          {media.contentType} | {formatFileSize(media.fileSize)} | {formatDateTime(media.uploadedAt)}
+                                        </p>
+                                      </div>
+                                      <div className="ml-2 flex shrink-0 gap-1">
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          onClick={() => handleDownloadParkMedia(media.id)}
+                                          title="Baixar"
+                                        >
+                                          <Download className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          className="text-red-500 hover:text-red-700"
+                                          onClick={() => handleDeleteParkMedia(park.id, media.id)}
+                                          title="Excluir"
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           </div>
                         </>

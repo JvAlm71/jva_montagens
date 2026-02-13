@@ -550,6 +550,9 @@ public class FinancialService {
         if (startDate == null || endDate == null) {
             return null;
         }
+        if (endDate.isBefore(startDate)) {
+            throw new IllegalArgumentException("endDate cannot be before startDate.");
+        }
         return Math.toIntExact(ChronoUnit.DAYS.between(startDate, endDate) + 1L);
     }
 
@@ -642,6 +645,8 @@ public class FinancialService {
         if (input.days() != null) {
             validateDays(input.days());
             service.setDays(input.days());
+        } else if (input.startDate() != null || input.endDate() != null) {
+            service.setDays(calculateDays(service.getStartDate(), service.getEndDate()));
         }
 
         if (service.getLeader() == null

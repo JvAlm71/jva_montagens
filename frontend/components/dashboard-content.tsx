@@ -192,6 +192,11 @@ export function DashboardContent() {
                 Parques
               </Button>
             </Link>
+            <Link href="/employees">
+              <Button variant="ghost" size="sm">
+                Funcionarios
+              </Button>
+            </Link>
             <Link href="/financial">
               <Button variant="ghost" size="sm">
                 Financeiro

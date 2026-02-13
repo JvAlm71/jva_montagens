@@ -1,6 +1,8 @@
 package com.java10x.jvaMontagens.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -43,11 +45,28 @@ public class PaymentEntryModel {
     @Column(length = 500)
     private String notes;
 
-    @ManyToOne(fetch = FetchType.LAZY)
+    @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "employee_id")
     private FuncionariosModel employee;
 
-    @ManyToOne(fetch = FetchType.LAZY)
+    @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "client_cnpj", referencedColumnName = "cnpj")
     private ClientModel client;
+
+    @Column(name = "has_receipt")
+    private Boolean hasReceipt = false;
+
+    @Column(name = "receipt_file_name", length = 255)
+    private String receiptFileName;
+
+    @Column(name = "receipt_content_type", length = 120)
+    private String receiptContentType;
+
+    @Column(name = "receipt_size")
+    private Long receiptSize;
+
+    @JsonIgnore
+    @JdbcTypeCode(SqlTypes.VARBINARY)
+    @Column(name = "receipt_bytes", columnDefinition = "bytea")
+    private byte[] receiptBytes;
 }

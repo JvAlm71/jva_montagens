@@ -2,10 +2,15 @@ package com.java10x.jvaMontagens.controller;
 
 import com.java10x.jvaMontagens.model.*;
 import com.java10x.jvaMontagens.service.FinancialService;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -108,6 +113,7 @@ public class Financial {
             return financialService.updateServiceEntry(serviceId, new FinancialService.UpdateServiceEntryInput(
                     request.serviceType(),
                     request.teamType(),
+                    request.leaderId(),
                     request.meters(),
                     request.unitPrice(),
                     request.grossValue(),
@@ -192,7 +198,9 @@ public class Financial {
                     request.invoiceNumber(),
                     request.amount(),
                     request.category(),
-                    request.notes()
+                    request.notes(),
+                    request.employeeId(),
+                    request.clientCnpj()
             ));
         } catch (IllegalArgumentException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
@@ -206,6 +214,41 @@ public class Financial {
     public void deletePayment(@PathVariable Long paymentId) {
         try {
             financialService.deletePaymentEntry(paymentId);
+        } catch (NoSuchElementException ex) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage());
+        }
+    }
+
+    @PostMapping(value = "/payments/{paymentId}/receipt", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public PaymentEntryModel uploadPaymentReceipt(@PathVariable Long paymentId, @RequestPart("file") MultipartFile file) {
+        try {
+            return financialService.uploadPaymentReceipt(
+                    paymentId,
+                    file.getOriginalFilename(),
+                    file.getContentType(),
+                    file.getBytes()
+            );
+        } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Failed to read uploaded file.");
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        } catch (NoSuchElementException ex) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage());
+        }
+    }
+
+    @GetMapping("/payments/{paymentId}/receipt")
+    public ResponseEntity<byte[]> downloadPaymentReceipt(@PathVariable Long paymentId) {
+        try {
+            FinancialService.PaymentReceiptFile file = financialService.getPaymentReceipt(paymentId);
+            String safeFileName = file.fileName().replace("\"", "");
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + safeFileName + "\"")
+                    .contentType(MediaType.parseMediaType(file.contentType()))
+                    .contentLength(file.data().length)
+                    .body(file.data());
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
         } catch (NoSuchElementException ex) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage());
         }
@@ -251,6 +294,15 @@ public class Financial {
     public FinancialService.ParkFinancialOverview parkOverview(@PathVariable Long parkId) {
         try {
             return financialService.calculateParkOverview(parkId);
+        } catch (NoSuchElementException ex) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage());
+        }
+    }
+
+    @GetMapping("/car-rentals/summary")
+    public FinancialService.CarRentalSummary carRentalSummary(@RequestParam(required = false) Long parkId) {
+        try {
+            return financialService.summarizeCarRental(parkId);
         } catch (NoSuchElementException ex) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage());
         }
@@ -311,6 +363,7 @@ public class Financial {
     public record UpdateServiceEntryRequest(
             ServiceType serviceType,
             String teamType,
+            Long leaderId,
             BigDecimal meters,
             BigDecimal unitPrice,
             BigDecimal grossValue,
@@ -326,6 +379,8 @@ public class Financial {
             String invoiceNumber,
             BigDecimal amount,
             PaymentCategory category,
-            String notes
+            String notes,
+            Long employeeId,
+            String clientCnpj
     ) {}
 }

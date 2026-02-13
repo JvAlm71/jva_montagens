@@ -27,6 +27,8 @@ public class FuncionariosController {
             FuncionariosModel funcionario = new FuncionariosModel();
             funcionario.setName(request.name());
             funcionario.setPixKey(request.pixKey());
+            funcionario.setGovEmail(request.govEmail());
+            funcionario.setGovPassword(request.govPassword());
             funcionario.setRole(request.role());
             funcionario.setDailyRate(request.dailyRate());
             funcionario.setPricePerMeter(request.pricePerMeter());
@@ -40,11 +42,14 @@ public class FuncionariosController {
     }
 
     @GetMapping
-    public List<FuncionariosModel> list(@RequestParam(required = false) JobRole role) {
+    public List<FuncionariosModel> list(
+            @RequestParam(required = false) JobRole role,
+            @RequestParam(required = false) Boolean onlyActive
+    ) {
         if (role != null) {
-            return funcionariosService.listByRole(role);
+            return funcionariosService.listByRole(role, onlyActive);
         }
-        return funcionariosService.listAll();
+        return funcionariosService.listAll(onlyActive);
     }
 
     @GetMapping("/{id}")
@@ -56,9 +61,43 @@ public class FuncionariosController {
         }
     }
 
+    @PutMapping("/{id}")
+    public FuncionariosModel update(@PathVariable Long id, @RequestBody UpdateFuncionarioRequest request) {
+        try {
+            FuncionariosModel updates = new FuncionariosModel();
+            updates.setName(request.name());
+            updates.setPixKey(request.pixKey());
+            updates.setGovEmail(request.govEmail());
+            updates.setGovPassword(request.govPassword());
+            updates.setRole(request.role());
+            updates.setDailyRate(request.dailyRate());
+            updates.setPricePerMeter(request.pricePerMeter());
+            updates.setActive(request.active());
+            return funcionariosService.updateFuncionario(id, updates, request.userCpf());
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        } catch (NoSuchElementException ex) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage());
+        }
+    }
+
     public record CreateFuncionarioRequest(
             String name,
             String pixKey,
+            String govEmail,
+            String govPassword,
+            JobRole role,
+            BigDecimal dailyRate,
+            BigDecimal pricePerMeter,
+            String userCpf,
+            Boolean active
+    ) {}
+
+    public record UpdateFuncionarioRequest(
+            String name,
+            String pixKey,
+            String govEmail,
+            String govPassword,
             JobRole role,
             BigDecimal dailyRate,
             BigDecimal pricePerMeter,

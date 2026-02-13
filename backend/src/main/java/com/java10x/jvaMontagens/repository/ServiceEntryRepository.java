@@ -9,4 +9,5 @@ import java.util.List;
 @Repository
 public interface ServiceEntryRepository extends JpaRepository<ServiceEntryModel, Long> {
     List<ServiceEntryModel> findByFinancialId(Long financialId);
+    boolean existsByFinancialIdAndLeaderIsNull(Long financialId);
 }

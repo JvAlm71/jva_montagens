@@ -32,18 +32,38 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   })
 
   if (!response.ok) {
-    let message = "Erro inesperado ao processar requisicao."
-    try {
-      const payload = (await response.json()) as { message?: string }
-      if (payload.message) message = payload.message
-    } catch {
-      // ignore json parse failures
-    }
-    throw new ApiError(message, response.status)
+    throw await parseApiError(response)
   }
 
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
+}
+
+async function parseApiError(response: Response): Promise<ApiError> {
+  let message = "Erro inesperado ao processar requisicao."
+  const clonedResponse = response.clone()
+  try {
+    const payload = (await clonedResponse.json()) as {
+      message?: string
+      detail?: string
+      error?: string
+      title?: string
+    }
+    message =
+      payload.message ||
+      payload.detail ||
+      payload.error ||
+      payload.title ||
+      message
+  } catch {
+    try {
+      const text = await response.text()
+      if (text && text.trim()) message = text.trim()
+    } catch {
+      // ignore body parse failures
+    }
+  }
+  return new ApiError(message, response.status)
 }
 
 export type AuthUser = {
@@ -76,6 +96,25 @@ export type Park = {
   client: Client
 }
 
+export type JobRole = "ADMINISTRATOR" | "LEADER" | "ASSEMBLER"
+
+export type Employee = {
+  id: number
+  name: string
+  pixKey?: string | null
+  govEmail?: string | null
+  govPassword?: string | null
+  role: JobRole
+  dailyRate?: number | null
+  pricePerMeter?: number | null
+  active: boolean
+  user?: {
+    cpf: string
+    fullName: string
+    email: string
+  } | null
+}
+
 export type FinancialStatus = "OPEN" | "CLOSED"
 
 export type ParkPeriodSummary = {
@@ -101,6 +140,36 @@ export type ParkFinancialOverview = {
   periods: ParkPeriodSummary[]
 }
 
+export type CarRentalPeriodTotal = {
+  periodId: number
+  parkId: number
+  parkName: string
+  year: number
+  month: number
+  value: number
+}
+
+export type CarRentalMonthTotal = {
+  year: number
+  month: number
+  total: number
+}
+
+export type CarRentalYearTotal = {
+  year: number
+  total: number
+}
+
+export type CarRentalSummary = {
+  parkId?: number | null
+  parkName?: string | null
+  totalAllTime: number
+  currentYearTotal: number
+  annualTotals: CarRentalYearTotal[]
+  monthlyTotals: CarRentalMonthTotal[]
+  periodTotals: CarRentalPeriodTotal[]
+}
+
 export type FinancialPeriod = {
   id: number
   year: number
@@ -121,8 +190,17 @@ export type FinancialSummary = {
   grossRevenue: number
   helpersCost: number
   leaderCost: number
+  leaderEarnings: {
+    leaderId: number
+    leaderName: string
+    totalMeters: number
+    rateUsed: number
+    totalEarnings: number
+  }[]
   taxValue: number
   carRentalValue: number
+  clientPaymentsReceived: number
+  clientBalancePending: number
   additionalPayments: number
   totalCost: number
   netRevenue: number
@@ -130,6 +208,7 @@ export type FinancialSummary = {
 }
 
 export type PaymentCategory =
+  | "CLIENT_PAYMENT"
   | "EMPLOYEE_HELPER"
   | "EMPLOYEE_LEADER"
   | "TAX"
@@ -144,6 +223,12 @@ export type PaymentEntry = {
   amount: number
   category: PaymentCategory
   notes?: string | null
+  employee?: Employee | null
+  client?: Client | null
+  hasReceipt?: boolean
+  receiptFileName?: string | null
+  receiptContentType?: string | null
+  receiptSize?: number | null
 }
 
 export type ServiceType = "ASSEMBLY" | "DISASSEMBLY" | "MAINTENANCE" | "OTHER"
@@ -152,6 +237,7 @@ export type ServiceEntry = {
   id: number
   serviceType: ServiceType
   teamType: string
+  leader?: Employee | null
   meters: number
   unitPrice: number
   grossValue: number
@@ -170,6 +256,64 @@ export async function loginAdmin(email: string, password: string): Promise<Login
 
 export async function getCurrentAdmin(token: string): Promise<AuthUser> {
   return request<AuthUser>("/auth/me", { token })
+}
+
+export async function getEmployees(
+  token: string,
+  options?: { role?: JobRole; onlyActive?: boolean }
+): Promise<Employee[]> {
+  const params = new URLSearchParams()
+  if (options?.role) params.set("role", options.role)
+  if (options?.onlyActive !== undefined) params.set("onlyActive", String(options.onlyActive))
+  const query = params.size > 0 ? `?${params.toString()}` : ""
+  return request<Employee[]>(`/funcionarios${query}`, { token })
+}
+
+export async function getEmployeeById(token: string, employeeId: number): Promise<Employee> {
+  return request<Employee>(`/funcionarios/${employeeId}`, { token })
+}
+
+export async function createEmployee(
+  token: string,
+  payload: {
+    name: string
+    pixKey?: string
+    govEmail?: string
+    govPassword?: string
+    role: JobRole
+    dailyRate?: number
+    pricePerMeter?: number
+    userCpf?: string
+    active?: boolean
+  }
+): Promise<Employee> {
+  return request<Employee>("/funcionarios", {
+    method: "POST",
+    token,
+    body: payload,
+  })
+}
+
+export async function updateEmployee(
+  token: string,
+  employeeId: number,
+  payload: {
+    name?: string
+    pixKey?: string
+    govEmail?: string
+    govPassword?: string
+    role?: JobRole
+    dailyRate?: number
+    pricePerMeter?: number
+    userCpf?: string
+    active?: boolean
+  }
+): Promise<Employee> {
+  return request<Employee>(`/funcionarios/${employeeId}`, {
+    method: "PUT",
+    token,
+    body: payload,
+  })
 }
 
 export async function getClients(token: string): Promise<Client[]> {
@@ -250,6 +394,10 @@ export async function getPeriods(token: string, parkId?: number): Promise<Financ
   return request<FinancialPeriod[]>(`/financial/periods${query}`, { token })
 }
 
+export async function getPeriod(token: string, periodId: number): Promise<FinancialPeriod> {
+  return request<FinancialPeriod>(`/financial/periods/${periodId}`, { token })
+}
+
 export async function createPeriod(
   token: string,
   payload: {
@@ -298,6 +446,11 @@ export async function getPeriodSummary(token: string, periodId: number): Promise
   return request<FinancialSummary>(`/financial/periods/${periodId}/summary`, { token })
 }
 
+export async function getCarRentalSummary(token: string, parkId?: number): Promise<CarRentalSummary> {
+  const query = parkId ? `?parkId=${parkId}` : ""
+  return request<CarRentalSummary>(`/financial/car-rentals/summary${query}`, { token })
+}
+
 export async function getPeriodPayments(token: string, periodId: number): Promise<PaymentEntry[]> {
   return request<PaymentEntry[]>(`/financial/periods/${periodId}/payments`, { token })
 }
@@ -327,6 +480,57 @@ export async function addPayment(
   })
 }
 
+export async function uploadPaymentReceipt(
+  token: string,
+  paymentId: number,
+  file: File
+): Promise<PaymentEntry> {
+  const formData = new FormData()
+  formData.append("file", file)
+
+  const response = await fetch(`${API_BASE_URL}/financial/payments/${paymentId}/receipt`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
+    cache: "no-store",
+  })
+
+  if (!response.ok) {
+    throw await parseApiError(response)
+  }
+
+  return (await response.json()) as PaymentEntry
+}
+
+export async function downloadPaymentReceipt(
+  token: string,
+  paymentId: number
+): Promise<{ blob: Blob; fileName: string }> {
+  const response = await fetch(`${API_BASE_URL}/financial/payments/${paymentId}/receipt`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    cache: "no-store",
+  })
+
+  if (!response.ok) {
+    throw await parseApiError(response)
+  }
+
+  const blob = await response.blob()
+  const contentDisposition = response.headers.get("content-disposition")
+  const utf8Match = contentDisposition?.match(/filename\*=UTF-8''([^;]+)/i)
+  const asciiMatch = contentDisposition?.match(/filename="?([^"]+)"?/i)
+  const fileName = utf8Match?.[1]
+    ? decodeURIComponent(utf8Match[1])
+    : asciiMatch?.[1] || `comprovante-pagamento-${paymentId}`
+
+  return { blob, fileName }
+}
+
 export async function updatePayment(
   token: string,
   paymentId: number,
@@ -337,6 +541,8 @@ export async function updatePayment(
     amount?: number
     category?: PaymentCategory
     notes?: string
+    employeeId?: number
+    clientCnpj?: string
   }
 ): Promise<PaymentEntry> {
   return request<PaymentEntry>(`/financial/payments/${paymentId}`, {
@@ -382,6 +588,7 @@ export async function updateService(
   payload: {
     serviceType?: ServiceType
     teamType?: string
+    leaderId?: number
     meters?: number
     unitPrice?: number
     grossValue?: number

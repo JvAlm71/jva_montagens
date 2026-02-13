@@ -25,6 +25,12 @@ public class FuncionariosModel {
 
     @Column(length = 120)
     private String pixKey;
+
+    @Column(name = "gov_email", length = 150)
+    private String govEmail;
+
+    @Column(name = "gov_password", length = 200)
+    private String govPassword;
     
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

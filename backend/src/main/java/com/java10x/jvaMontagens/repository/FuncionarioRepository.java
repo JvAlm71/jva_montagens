@@ -12,5 +12,7 @@ import java.util.Optional;
 @Repository
 public interface FuncionarioRepository extends JpaRepository<FuncionariosModel, Long> {
     List<FuncionariosModel> findByRole(JobRole role);
+    List<FuncionariosModel> findByActiveTrue();
+    List<FuncionariosModel> findByRoleAndActiveTrue(JobRole role);
     Optional<FuncionariosModel> findByUserCpfAndRoleAndActiveTrue(String userCpf, JobRole role);
 }

@@ -280,6 +280,11 @@ export default function ParksPage() {
                 Financeiro
               </Button>
             </Link>
+            <Link href="/employees">
+              <Button variant="ghost" size="sm">
+                Funcionarios
+              </Button>
+            </Link>
             <Button variant="ghost" size="sm" className="gap-2" onClick={loadData}>
               <RefreshCcw className="h-4 w-4" />
               Atualizar

@@ -8,9 +8,13 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.TreeMap;
 
 @Service
 public class FinancialService {
@@ -102,18 +106,11 @@ public class FinancialService {
 
     public ServiceEntryModel addServiceEntry(Long financialId, CreateServiceEntryInput input) {
         FinancialModel financial = getPeriod(financialId);
-
-        FuncionariosModel leader = null;
-        if (input.leaderId() != null) {
-            leader = funcionarioRepository.findById(input.leaderId())
-                    .orElseThrow(() -> new NoSuchElementException("Leader not found for id " + input.leaderId()));
-        }
+        FuncionariosModel leader = resolveLeaderForService(financial, input.leaderId());
 
         BigDecimal meters = zeroIfNull(input.meters());
-        BigDecimal unitPrice = input.unitPrice() == null ? financial.getJvaPricePerMeter() : input.unitPrice();
-        BigDecimal grossValue = input.grossValue() == null
-                ? meters.multiply(unitPrice).setScale(2, RoundingMode.HALF_UP)
-                : input.grossValue();
+        BigDecimal unitPrice = zeroIfNull(financial.getJvaPricePerMeter());
+        BigDecimal grossValue = meters.multiply(unitPrice).setScale(2, RoundingMode.HALF_UP);
 
         validatePositive(meters, "meters");
         validateNonNegative(unitPrice, "unitPrice");
@@ -137,8 +134,13 @@ public class FinancialService {
 
         if (input.helpers() != null) {
             for (ServiceHelperInput helperInput : input.helpers()) {
+                if (helperInput == null || helperInput.employeeId() == null) {
+                    throw new IllegalArgumentException("Helper employeeId is required.");
+                }
+
                 FuncionariosModel helperEmployee = funcionarioRepository.findById(helperInput.employeeId())
                         .orElseThrow(() -> new NoSuchElementException("Helper employee not found for id " + helperInput.employeeId()));
+                validateEmployeeRole(helperEmployee, JobRole.ASSEMBLER, "Helper employee");
 
                 BigDecimal dailyRateUsed = helperInput.dailyRateUsed() != null
                         ? helperInput.dailyRateUsed()
@@ -174,18 +176,12 @@ public class FinancialService {
 
     public PaymentEntryModel addPaymentEntry(Long financialId, CreatePaymentEntryInput input) {
         FinancialModel financial = getPeriod(financialId);
+        PaymentCategory category = input.category() == null ? PaymentCategory.OTHER : input.category();
+        FuncionariosModel employee = resolvePaymentEmployee(category, input.employeeId());
 
-        FuncionariosModel employee = null;
-        if (input.employeeId() != null) {
-            employee = funcionarioRepository.findById(input.employeeId())
-                    .orElseThrow(() -> new NoSuchElementException("Employee not found for id " + input.employeeId()));
-        }
-
-        ClientModel client = null;
-        if (input.clientCnpj() != null) {
-            String normalizedCnpj = DocumentUtils.normalizeCnpj(input.clientCnpj());
-            client = clientRepository.findById(normalizedCnpj)
-                    .orElseThrow(() -> new NoSuchElementException("Client not found for CNPJ " + normalizedCnpj));
+        ClientModel client = resolveClient(input.clientCnpj());
+        if (category == PaymentCategory.CLIENT_PAYMENT && client == null) {
+            client = financial.getPark().getClient();
         }
 
         if (input.name() == null || input.name().isBlank()) {
@@ -201,10 +197,11 @@ public class FinancialService {
         payment.setName(input.name().trim());
         payment.setInvoiceNumber(input.invoiceNumber());
         payment.setAmount(amount);
-        payment.setCategory(input.category() == null ? PaymentCategory.OTHER : input.category());
+        payment.setCategory(category);
         payment.setNotes(input.notes());
         payment.setEmployee(employee);
         payment.setClient(client);
+        payment.setHasReceipt(false);
 
         return paymentEntryRepository.save(payment);
     }
@@ -260,6 +257,78 @@ public class FinancialService {
         );
     }
 
+    @Transactional(readOnly = true)
+    public CarRentalSummary summarizeCarRental(Long parkId) {
+        ParkModel park = null;
+        List<FinancialModel> periods;
+        if (parkId != null) {
+            park = parkRepository.findById(parkId)
+                    .orElseThrow(() -> new NoSuchElementException("Park not found for id " + parkId));
+            periods = financialRepository.findByParkIdOrderByYearDescMonthDesc(parkId);
+        } else {
+            periods = financialRepository.findAll();
+        }
+
+        Map<YearMonth, BigDecimal> monthlyTotals = new TreeMap<>(Comparator.reverseOrder());
+        Map<Integer, BigDecimal> annualTotals = new TreeMap<>(Comparator.reverseOrder());
+
+        List<CarRentalPeriodTotal> periodTotals = periods.stream()
+                .map(period -> {
+                    BigDecimal value = zeroIfNull(period.getCarRentalValue());
+                    YearMonth key = YearMonth.of(period.getYear(), period.getMonth());
+                    monthlyTotals.merge(key, value, BigDecimal::add);
+                    annualTotals.merge(period.getYear(), value, BigDecimal::add);
+
+                    return new CarRentalPeriodTotal(
+                            period.getId(),
+                            period.getPark().getId(),
+                            period.getPark().getName(),
+                            period.getYear(),
+                            period.getMonth(),
+                            value.setScale(2, RoundingMode.HALF_UP)
+                    );
+                })
+                .sorted(Comparator
+                        .comparing(CarRentalPeriodTotal::year).reversed()
+                        .thenComparing(CarRentalPeriodTotal::month, Comparator.reverseOrder())
+                        .thenComparing(CarRentalPeriodTotal::periodId, Comparator.reverseOrder()))
+                .toList();
+
+        List<CarRentalMonthTotal> monthlyBreakdown = monthlyTotals.entrySet().stream()
+                .map(entry -> new CarRentalMonthTotal(
+                        entry.getKey().getYear(),
+                        entry.getKey().getMonthValue(),
+                        entry.getValue().setScale(2, RoundingMode.HALF_UP)
+                ))
+                .toList();
+
+        List<CarRentalYearTotal> annualBreakdown = annualTotals.entrySet().stream()
+                .map(entry -> new CarRentalYearTotal(
+                        entry.getKey(),
+                        entry.getValue().setScale(2, RoundingMode.HALF_UP)
+                ))
+                .toList();
+
+        BigDecimal totalAllTime = annualBreakdown.stream()
+                .map(CarRentalYearTotal::total)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        int currentYear = LocalDate.now().getYear();
+        BigDecimal currentYearTotal = annualTotals.getOrDefault(currentYear, BigDecimal.ZERO)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        return new CarRentalSummary(
+                park == null ? null : park.getId(),
+                park == null ? null : park.getName(),
+                totalAllTime,
+                currentYearTotal,
+                annualBreakdown,
+                monthlyBreakdown,
+                periodTotals
+        );
+    }
+
     private FinancialSummary calculateSummaryForPeriod(FinancialModel financial) {
         Long financialId = financial.getId();
         List<ServiceEntryModel> services = serviceEntryRepository.findByFinancialId(financialId);
@@ -269,28 +338,80 @@ public class FinancialService {
                 .map(ServiceEntryModel::getMeters)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        BigDecimal grossRevenue = services.stream()
-                .map(ServiceEntryModel::getGrossValue)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal grossRevenue = totalMeters
+                .multiply(zeroIfNull(financial.getJvaPricePerMeter()))
+                .setScale(2, RoundingMode.HALF_UP);
 
         BigDecimal helpersCost = services.stream()
                 .flatMap(service -> service.getHelpers().stream())
                 .map(ServiceHelperModel::getTotalCost)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        BigDecimal leaderCost = totalMeters
-                .multiply(zeroIfNull(financial.getLeaderPricePerMeter()))
-                .setScale(2, RoundingMode.HALF_UP);
+        Map<Long, LeaderAccumulator> leaderAccumulatorMap = new TreeMap<>();
+        BigDecimal leaderCost = BigDecimal.ZERO;
+        for (ServiceEntryModel service : services) {
+            FuncionariosModel leader = service.getLeader();
+            if (leader == null) continue;
+
+            BigDecimal serviceMeters = zeroIfNull(service.getMeters());
+            BigDecimal leaderRate = resolveLeaderRate(leader, financial);
+            BigDecimal serviceLeaderEarning = serviceMeters
+                    .multiply(leaderRate)
+                    .setScale(2, RoundingMode.HALF_UP);
+
+            leaderCost = leaderCost.add(serviceLeaderEarning);
+
+            LeaderAccumulator current = leaderAccumulatorMap.get(leader.getId());
+            if (current == null) {
+                current = new LeaderAccumulator(
+                        leader.getId(),
+                        leader.getName(),
+                        BigDecimal.ZERO,
+                        leaderRate,
+                        BigDecimal.ZERO
+                );
+            }
+            leaderAccumulatorMap.put(
+                    leader.getId(),
+                    new LeaderAccumulator(
+                            current.leaderId(),
+                            current.leaderName(),
+                            current.totalMeters().add(serviceMeters),
+                            current.rateUsed(),
+                            current.totalEarnings().add(serviceLeaderEarning)
+                    )
+            );
+        }
+
+        List<LeaderEarningSummary> leaderEarnings = leaderAccumulatorMap.values().stream()
+                .map(item -> new LeaderEarningSummary(
+                        item.leaderId(),
+                        item.leaderName(),
+                        item.totalMeters().setScale(2, RoundingMode.HALF_UP),
+                        item.rateUsed().setScale(2, RoundingMode.HALF_UP),
+                        item.totalEarnings().setScale(2, RoundingMode.HALF_UP)
+                ))
+                .toList();
 
         BigDecimal taxes = grossRevenue
                 .multiply(zeroIfNull(financial.getTaxRate()))
                 .setScale(2, RoundingMode.HALF_UP);
 
+        BigDecimal clientPaymentsReceived = payments.stream()
+                .filter(payment -> payment.getCategory() == PaymentCategory.CLIENT_PAYMENT)
+                .map(PaymentEntryModel::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
         BigDecimal additionalPayments = payments.stream()
+                .filter(payment -> payment.getCategory() != PaymentCategory.CLIENT_PAYMENT)
                 .map(PaymentEntryModel::getAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         BigDecimal carRentalIncome = zeroIfNull(financial.getCarRentalValue());
+        BigDecimal expectedClientBilling = grossRevenue.add(carRentalIncome).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal clientBalancePending = expectedClientBilling
+                .subtract(clientPaymentsReceived)
+                .setScale(2, RoundingMode.HALF_UP);
 
         BigDecimal totalCost = helpersCost
                 .add(leaderCost)
@@ -302,7 +423,7 @@ public class FinancialService {
                 .subtract(totalCost)
                 .setScale(2, RoundingMode.HALF_UP);
 
-        BigDecimal totalIncome = grossRevenue.add(carRentalIncome);
+        BigDecimal totalIncome = expectedClientBilling;
         BigDecimal marginPercent = totalIncome.compareTo(BigDecimal.ZERO) == 0
                 ? BigDecimal.ZERO
                 : netRevenue.multiply(BigDecimal.valueOf(100))
@@ -315,9 +436,12 @@ public class FinancialService {
                 totalMeters.setScale(2, RoundingMode.HALF_UP),
                 grossRevenue.setScale(2, RoundingMode.HALF_UP),
                 helpersCost.setScale(2, RoundingMode.HALF_UP),
-                leaderCost,
+                leaderCost.setScale(2, RoundingMode.HALF_UP),
+                leaderEarnings,
                 taxes,
                 carRentalIncome.setScale(2, RoundingMode.HALF_UP),
+                clientPaymentsReceived.setScale(2, RoundingMode.HALF_UP),
+                clientBalancePending,
                 additionalPayments.setScale(2, RoundingMode.HALF_UP),
                 totalCost.setScale(2, RoundingMode.HALF_UP),
                 netRevenue,
@@ -355,6 +479,73 @@ public class FinancialService {
         }
     }
 
+    private FuncionariosModel resolveLeaderForService(FinancialModel financial, Long leaderId) {
+        boolean requiresLeader = zeroIfNull(financial.getLeaderPricePerMeter()).compareTo(BigDecimal.ZERO) > 0;
+        if (leaderId == null || leaderId <= 0) {
+            if (requiresLeader) {
+                throw new IllegalArgumentException("leaderId is required when leaderPricePerMeter is greater than zero.");
+            }
+            return null;
+        }
+
+        FuncionariosModel leader = funcionarioRepository.findById(leaderId)
+                .orElseThrow(() -> new NoSuchElementException("Leader not found for id " + leaderId));
+        validateEmployeeRole(leader, JobRole.LEADER, "Leader");
+        return leader;
+    }
+
+    private void validateEmployeeRole(FuncionariosModel employee, JobRole expectedRole, String context) {
+        if (employee.getRole() != expectedRole) {
+            throw new IllegalArgumentException(context + " must have role " + expectedRole.name() + ".");
+        }
+        if (Boolean.FALSE.equals(employee.getActive())) {
+            throw new IllegalArgumentException(context + " must be active.");
+        }
+    }
+
+    private FuncionariosModel resolvePaymentEmployee(PaymentCategory category, Long employeeId) {
+        if (category != PaymentCategory.EMPLOYEE_HELPER && category != PaymentCategory.EMPLOYEE_LEADER) {
+            return null;
+        }
+
+        if (employeeId == null || employeeId <= 0) {
+            throw new IllegalArgumentException("employeeId is required for " + category.name() + " category.");
+        }
+
+        FuncionariosModel employee = funcionarioRepository.findById(employeeId)
+                .orElseThrow(() -> new NoSuchElementException("Employee not found for id " + employeeId));
+
+        JobRole expectedRole = category == PaymentCategory.EMPLOYEE_HELPER ? JobRole.ASSEMBLER : JobRole.LEADER;
+        validateEmployeeRole(employee, expectedRole, "Payment employee");
+        return employee;
+    }
+
+    private BigDecimal resolveLeaderRate(FuncionariosModel leader, FinancialModel financial) {
+        BigDecimal employeeRate = leader.getPricePerMeter();
+        if (employeeRate != null && employeeRate.compareTo(BigDecimal.ZERO) > 0) {
+            return employeeRate;
+        }
+        return zeroIfNull(financial.getLeaderPricePerMeter());
+    }
+
+    private ClientModel resolveClient(String clientCnpj) {
+        if (clientCnpj == null) return null;
+        String trimmedCnpj = clientCnpj.trim();
+        if (trimmedCnpj.isEmpty()) return null;
+
+        String normalizedCnpj = DocumentUtils.normalizeCnpj(trimmedCnpj);
+        return clientRepository.findById(normalizedCnpj)
+                .orElseThrow(() -> new NoSuchElementException("Client not found for CNPJ " + normalizedCnpj));
+    }
+
+    private record LeaderAccumulator(
+            Long leaderId,
+            String leaderName,
+            BigDecimal totalMeters,
+            BigDecimal rateUsed,
+            BigDecimal totalEarnings
+    ) {}
+
     private Integer calculateDays(LocalDate startDate, LocalDate endDate) {
         if (startDate == null || endDate == null) {
             return null;
@@ -376,10 +567,15 @@ public class FinancialService {
     @Transactional
     public FinancialModel updatePeriod(Long periodId, UpdateFinancialPeriodInput input) {
         FinancialModel financial = getPeriod(periodId);
+        BigDecimal newLeaderPricePerMeter = input.leaderPricePerMeter() != null
+                ? input.leaderPricePerMeter()
+                : financial.getLeaderPricePerMeter();
+        boolean jvaPriceUpdated = false;
 
         if (input.jvaPricePerMeter() != null) {
             validateNonNegative(input.jvaPricePerMeter(), "jvaPricePerMeter");
             financial.setJvaPricePerMeter(input.jvaPricePerMeter());
+            jvaPriceUpdated = true;
         }
         if (input.leaderPricePerMeter() != null) {
             validateNonNegative(input.leaderPricePerMeter(), "leaderPricePerMeter");
@@ -397,6 +593,22 @@ public class FinancialService {
         if (input.status() != null) {
             financial.setStatus(input.status());
         }
+
+        if (zeroIfNull(newLeaderPricePerMeter).compareTo(BigDecimal.ZERO) > 0
+                && serviceEntryRepository.existsByFinancialIdAndLeaderIsNull(periodId)) {
+            throw new IllegalArgumentException("All services must have leaderId when leaderPricePerMeter is greater than zero.");
+        }
+
+        if (jvaPriceUpdated) {
+            BigDecimal currentJvaPrice = zeroIfNull(financial.getJvaPricePerMeter());
+            List<ServiceEntryModel> services = serviceEntryRepository.findByFinancialId(periodId);
+            for (ServiceEntryModel service : services) {
+                service.setUnitPrice(currentJvaPrice);
+                service.setGrossValue(zeroIfNull(service.getMeters()).multiply(currentJvaPrice).setScale(2, RoundingMode.HALF_UP));
+            }
+            serviceEntryRepository.saveAll(services);
+        }
+
         return financialRepository.save(financial);
     }
 
@@ -413,26 +625,29 @@ public class FinancialService {
 
         if (input.serviceType() != null) service.setServiceType(input.serviceType());
         if (input.teamType() != null) service.setTeamType(input.teamType());
+        if (input.leaderId() != null) {
+            service.setLeader(resolveLeaderForService(service.getFinancial(), input.leaderId()));
+        }
         if (input.meters() != null) {
             validatePositive(input.meters(), "meters");
             service.setMeters(input.meters());
         }
-        if (input.unitPrice() != null) {
-            validateNonNegative(input.unitPrice(), "unitPrice");
-            service.setUnitPrice(input.unitPrice());
-        }
-        if (input.grossValue() != null) {
-            validateNonNegative(input.grossValue(), "grossValue");
-            service.setGrossValue(input.grossValue());
-        } else if (input.meters() != null || input.unitPrice() != null) {
-            BigDecimal m = input.meters() != null ? input.meters() : service.getMeters();
-            BigDecimal u = input.unitPrice() != null ? input.unitPrice() : service.getUnitPrice();
-            service.setGrossValue(m.multiply(u).setScale(2, RoundingMode.HALF_UP));
-        }
+        BigDecimal unitPrice = zeroIfNull(service.getFinancial().getJvaPricePerMeter());
+        validateNonNegative(unitPrice, "unitPrice");
+        service.setUnitPrice(unitPrice);
+        service.setGrossValue(service.getMeters().multiply(unitPrice).setScale(2, RoundingMode.HALF_UP));
         if (input.notes() != null) service.setNotes(input.notes());
         if (input.startDate() != null) service.setStartDate(input.startDate());
         if (input.endDate() != null) service.setEndDate(input.endDate());
-        if (input.days() != null) service.setDays(input.days());
+        if (input.days() != null) {
+            validateDays(input.days());
+            service.setDays(input.days());
+        }
+
+        if (service.getLeader() == null
+                && zeroIfNull(service.getFinancial().getLeaderPricePerMeter()).compareTo(BigDecimal.ZERO) > 0) {
+            throw new IllegalArgumentException("leaderId is required when leaderPricePerMeter is greater than zero.");
+        }
 
         return serviceEntryRepository.save(service);
     }
@@ -449,6 +664,15 @@ public class FinancialService {
         PaymentEntryModel payment = paymentEntryRepository.findById(paymentId)
                 .orElseThrow(() -> new NoSuchElementException("Payment entry not found for id " + paymentId));
 
+        PaymentCategory category = input.category() != null ? input.category() : payment.getCategory();
+        Long effectiveEmployeeId;
+        if (input.employeeId() != null) {
+            effectiveEmployeeId = input.employeeId();
+        } else {
+            effectiveEmployeeId = payment.getEmployee() == null ? null : payment.getEmployee().getId();
+        }
+        FuncionariosModel employee = resolvePaymentEmployee(category, effectiveEmployeeId);
+
         if (input.paymentDate() != null) payment.setPaymentDate(input.paymentDate());
         if (input.name() != null && !input.name().isBlank()) payment.setName(input.name().trim());
         if (input.invoiceNumber() != null) payment.setInvoiceNumber(input.invoiceNumber());
@@ -456,8 +680,17 @@ public class FinancialService {
             validatePositive(input.amount(), "amount");
             payment.setAmount(input.amount());
         }
-        if (input.category() != null) payment.setCategory(input.category());
+        payment.setCategory(category);
         if (input.notes() != null) payment.setNotes(input.notes());
+        payment.setEmployee(employee);
+        ClientModel client = payment.getClient();
+        if (input.clientCnpj() != null) {
+            client = resolveClient(input.clientCnpj());
+        }
+        if (category == PaymentCategory.CLIENT_PAYMENT && client == null) {
+            client = payment.getFinancial().getPark().getClient();
+        }
+        payment.setClient(client);
 
         return paymentEntryRepository.save(payment);
     }
@@ -467,6 +700,87 @@ public class FinancialService {
         PaymentEntryModel payment = paymentEntryRepository.findById(paymentId)
                 .orElseThrow(() -> new NoSuchElementException("Payment entry not found for id " + paymentId));
         paymentEntryRepository.delete(payment);
+    }
+
+    @Transactional
+    public PaymentEntryModel uploadPaymentReceipt(
+            Long paymentId,
+            String originalFilename,
+            String contentType,
+            byte[] data
+    ) {
+        PaymentEntryModel payment = paymentEntryRepository.findById(paymentId)
+                .orElseThrow(() -> new NoSuchElementException("Payment entry not found for id " + paymentId));
+
+        if (data == null || data.length == 0) {
+            throw new IllegalArgumentException("Receipt file cannot be empty.");
+        }
+        if (data.length > 10 * 1024 * 1024) {
+            throw new IllegalArgumentException("Receipt file cannot exceed 10MB.");
+        }
+
+        String normalizedContentType = normalizeReceiptContentType(contentType, originalFilename);
+        String normalizedFileName = normalizeReceiptFileName(originalFilename, normalizedContentType, paymentId);
+
+        payment.setReceiptBytes(data);
+        payment.setReceiptFileName(normalizedFileName);
+        payment.setReceiptContentType(normalizedContentType);
+        payment.setReceiptSize((long) data.length);
+        payment.setHasReceipt(true);
+
+        return paymentEntryRepository.save(payment);
+    }
+
+    @Transactional(readOnly = true)
+    public PaymentReceiptFile getPaymentReceipt(Long paymentId) {
+        PaymentEntryModel payment = paymentEntryRepository.findById(paymentId)
+                .orElseThrow(() -> new NoSuchElementException("Payment entry not found for id " + paymentId));
+
+        if (!Boolean.TRUE.equals(payment.getHasReceipt())
+                || payment.getReceiptBytes() == null
+                || payment.getReceiptBytes().length == 0) {
+            throw new NoSuchElementException("No receipt attached to this payment.");
+        }
+
+        String contentType = payment.getReceiptContentType() == null || payment.getReceiptContentType().isBlank()
+                ? "application/octet-stream"
+                : payment.getReceiptContentType();
+
+        String fileName = normalizeReceiptFileName(payment.getReceiptFileName(), contentType, paymentId);
+        return new PaymentReceiptFile(fileName, contentType, payment.getReceiptBytes());
+    }
+
+    private String normalizeReceiptContentType(String contentType, String fileName) {
+        String normalized = contentType == null ? "" : contentType.trim().toLowerCase();
+        if (normalized.isEmpty() && fileName != null) {
+            String lowerName = fileName.toLowerCase();
+            if (lowerName.endsWith(".pdf")) normalized = "application/pdf";
+            if (lowerName.endsWith(".png")) normalized = "image/png";
+            if (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")) normalized = "image/jpeg";
+            if (lowerName.endsWith(".webp")) normalized = "image/webp";
+        }
+
+        if (!"application/pdf".equals(normalized)
+                && !"image/png".equals(normalized)
+                && !"image/jpeg".equals(normalized)
+                && !"image/webp".equals(normalized)) {
+            throw new IllegalArgumentException("Only PDF or image files are accepted.");
+        }
+        return normalized;
+    }
+
+    private String normalizeReceiptFileName(String originalFilename, String contentType, Long paymentId) {
+        String candidate = originalFilename == null ? "" : originalFilename.trim();
+        if (candidate.isEmpty()) {
+            String extension = switch (contentType) {
+                case "application/pdf" -> ".pdf";
+                case "image/png" -> ".png";
+                case "image/webp" -> ".webp";
+                default -> ".jpg";
+            };
+            return "payment-receipt-" + paymentId + extension;
+        }
+        return candidate.replaceAll("[\\r\\n\\\\/]+", "_");
     }
 
     public record CreateFinancialPeriodInput(
@@ -521,12 +835,23 @@ public class FinancialService {
             BigDecimal grossRevenue,
             BigDecimal helpersCost,
             BigDecimal leaderCost,
+            List<LeaderEarningSummary> leaderEarnings,
             BigDecimal taxValue,
             BigDecimal carRentalValue,
+            BigDecimal clientPaymentsReceived,
+            BigDecimal clientBalancePending,
             BigDecimal additionalPayments,
             BigDecimal totalCost,
             BigDecimal netRevenue,
             BigDecimal marginPercent
+    ) {}
+
+    public record LeaderEarningSummary(
+            Long leaderId,
+            String leaderName,
+            BigDecimal totalMeters,
+            BigDecimal rateUsed,
+            BigDecimal totalEarnings
     ) {}
 
     public record ParkPeriodSummary(
@@ -552,6 +877,42 @@ public class FinancialService {
             List<ParkPeriodSummary> periods
     ) {}
 
+    public record CarRentalPeriodTotal(
+            Long periodId,
+            Long parkId,
+            String parkName,
+            Integer year,
+            Integer month,
+            BigDecimal value
+    ) {}
+
+    public record CarRentalMonthTotal(
+            Integer year,
+            Integer month,
+            BigDecimal total
+    ) {}
+
+    public record CarRentalYearTotal(
+            Integer year,
+            BigDecimal total
+    ) {}
+
+    public record CarRentalSummary(
+            Long parkId,
+            String parkName,
+            BigDecimal totalAllTime,
+            BigDecimal currentYearTotal,
+            List<CarRentalYearTotal> annualTotals,
+            List<CarRentalMonthTotal> monthlyTotals,
+            List<CarRentalPeriodTotal> periodTotals
+    ) {}
+
+    public record PaymentReceiptFile(
+            String fileName,
+            String contentType,
+            byte[] data
+    ) {}
+
     public record UpdateFinancialPeriodInput(
             BigDecimal jvaPricePerMeter,
             BigDecimal leaderPricePerMeter,
@@ -563,6 +924,7 @@ public class FinancialService {
     public record UpdateServiceEntryInput(
             ServiceType serviceType,
             String teamType,
+            Long leaderId,
             BigDecimal meters,
             BigDecimal unitPrice,
             BigDecimal grossValue,
@@ -578,6 +940,8 @@ public class FinancialService {
             String invoiceNumber,
             BigDecimal amount,
             PaymentCategory category,
-            String notes
+            String notes,
+            Long employeeId,
+            String clientCnpj
     ) {}
 }

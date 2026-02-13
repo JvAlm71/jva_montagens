@@ -13,17 +13,25 @@ import {
   addService,
   ApiError,
   createPeriod,
+  downloadPaymentReceipt,
   deletePeriod,
   deletePayment,
   deleteService,
+  getCarRentalSummary,
+  getEmployees,
+  getPeriod,
   getPeriodPayments,
   getPeriods,
   getPeriodServices,
   getPeriodSummary,
   getParks,
+  uploadPaymentReceipt,
   updatePeriod,
   updatePayment,
   updateService,
+  type CarRentalSummary,
+  type Employee,
+  type FinancialPeriod,
   type FinancialSummary,
   type FinancialStatus,
   type Park,
@@ -49,20 +57,37 @@ function formatDate(value: string) {
   }).format(new Date(value))
 }
 
+const SERVICE_TYPE_LABELS: Record<ServiceType, string> = {
+  ASSEMBLY: "Montagem",
+  DISASSEMBLY: "Desmontagem",
+  MAINTENANCE: "Manutenção",
+  OTHER: "Outro",
+}
+
+const PAYMENT_CATEGORY_LABELS: Record<PaymentCategory, string> = {
+  CLIENT_PAYMENT: "Pagamento Cliente",
+  EMPLOYEE_HELPER: "Ajudante",
+  EMPLOYEE_LEADER: "Líder",
+  TAX: "Imposto",
+  CAR_RENTAL: "Aluguel Carro",
+  OTHER: "Outro",
+}
+
+const STATUS_LABELS: Record<FinancialStatus, string> = {
+  OPEN: "Aberta",
+  CLOSED: "Fechada",
+}
+
 export default function FinancialPage() {
   const { token, isCheckingAuth, logout } = useAuthGuard()
   const [parks, setParks] = useState<Park[]>([])
-  const [periods, setPeriods] = useState<
-    {
-      id: number
-      year: number
-      month: number
-      status: "OPEN" | "CLOSED"
-    }[]
-  >([])
+  const [periods, setPeriods] = useState<FinancialPeriod[]>([])
   const [summary, setSummary] = useState<FinancialSummary | null>(null)
   const [services, setServices] = useState<ServiceEntry[]>([])
   const [payments, setPayments] = useState<PaymentEntry[]>([])
+  const [leaders, setLeaders] = useState<Employee[]>([])
+  const [helpers, setHelpers] = useState<Employee[]>([])
+  const [carRental, setCarRental] = useState<CarRentalSummary | null>(null)
   const [selectedParkId, setSelectedParkId] = useState("")
   const [selectedPeriodId, setSelectedPeriodId] = useState("")
   const [loading, setLoading] = useState(true)
@@ -81,6 +106,7 @@ export default function FinancialPage() {
   const [serviceForm, setServiceForm] = useState({
     serviceType: "ASSEMBLY" as ServiceType,
     teamType: "MONTAGEM",
+    leaderId: "",
     meters: 0,
     unitPrice: 0,
     notes: "",
@@ -96,6 +122,7 @@ export default function FinancialPage() {
     invoiceNumber: "",
     notes: "",
     clientCnpj: "",
+    employeeId: "",
   })
 
   const [editingPeriod, setEditingPeriod] = useState(false)
@@ -111,6 +138,7 @@ export default function FinancialPage() {
   const [editServiceForm, setEditServiceForm] = useState({
     serviceType: "ASSEMBLY" as ServiceType,
     teamType: "",
+    leaderId: "",
     meters: 0,
     unitPrice: 0,
     notes: "",
@@ -126,7 +154,39 @@ export default function FinancialPage() {
     category: "OTHER" as PaymentCategory,
     invoiceNumber: "",
     notes: "",
+    employeeId: "",
+    clientCnpj: "",
   })
+  const [paymentReceiptFile, setPaymentReceiptFile] = useState<File | null>(null)
+  const [editPaymentReceiptFile, setEditPaymentReceiptFile] = useState<File | null>(null)
+
+  const selectedPeriod = useMemo(
+    () => periods.find((period) => period.id === Number(selectedPeriodId)) || null,
+    [periods, selectedPeriodId]
+  )
+  const selectedPark = useMemo(
+    () => parks.find((park) => park.id === Number(selectedParkId)) || null,
+    [parks, selectedParkId]
+  )
+
+  const requiresLeader = (selectedPeriod?.leaderPricePerMeter ?? 0) > 0
+
+  const paymentEmployeeOptions = useMemo(() => {
+    if (paymentForm.category === "EMPLOYEE_HELPER") return helpers
+    if (paymentForm.category === "EMPLOYEE_LEADER") return leaders
+    return []
+  }, [paymentForm.category, helpers, leaders])
+
+  const editPaymentEmployeeOptions = useMemo(() => {
+    if (editPaymentForm.category === "EMPLOYEE_HELPER") return helpers
+    if (editPaymentForm.category === "EMPLOYEE_LEADER") return leaders
+    return []
+  }, [editPaymentForm.category, helpers, leaders])
+
+  const selectedYearCarRentalTotal = useMemo(() => {
+    if (!carRental || !selectedPeriod) return 0
+    return carRental.annualTotals.find((item) => item.year === selectedPeriod.year)?.total || 0
+  }, [carRental, selectedPeriod])
 
   const loadParks = useMemo(
     () => async () => {
@@ -142,24 +202,35 @@ export default function FinancialPage() {
     [token, selectedParkId]
   )
 
+  const loadEmployees = useMemo(
+    () => async () => {
+      if (!token) return
+      const [fetchedLeaders, fetchedHelpers] = await Promise.all([
+        getEmployees(token, { role: "LEADER", onlyActive: true }),
+        getEmployees(token, { role: "ASSEMBLER", onlyActive: true }),
+      ])
+      setLeaders(fetchedLeaders)
+      setHelpers(fetchedHelpers)
+    },
+    [token]
+  )
+
   const loadPeriods = useMemo(
     () => async (parkId: number) => {
       if (!token) return
 
-      const fetched = await getPeriods(token, parkId)
-      const mapped = fetched.map((period) => ({
-        id: period.id,
-        year: period.year,
-        month: period.month,
-        status: period.status,
-      }))
+      const [fetchedPeriods, rentalSummary] = await Promise.all([
+        getPeriods(token, parkId),
+        getCarRentalSummary(token, parkId),
+      ])
 
-      setPeriods(mapped)
+      setPeriods(fetchedPeriods)
+      setCarRental(rentalSummary)
 
-      if (mapped.length > 0) {
+      if (fetchedPeriods.length > 0) {
         const currentlySelected = selectedPeriodId ? Number(selectedPeriodId) : null
-        const exists = currentlySelected && mapped.some((item) => item.id === currentlySelected)
-        if (!exists) setSelectedPeriodId(String(mapped[0].id))
+        const exists = currentlySelected && fetchedPeriods.some((item) => item.id === currentlySelected)
+        if (!exists) setSelectedPeriodId(String(fetchedPeriods[0].id))
       } else {
         setSelectedPeriodId("")
       }
@@ -193,11 +264,13 @@ export default function FinancialPage() {
         setError(null)
         setMessage(null)
 
-        await loadParks()
+        await Promise.all([loadParks(), loadEmployees()])
 
         const parkId = selectedParkId ? Number(selectedParkId) : null
         if (parkId) {
           await loadPeriods(parkId)
+        } else {
+          setCarRental(await getCarRentalSummary(token))
         }
 
         const periodId = selectedPeriodId ? Number(selectedPeriodId) : null
@@ -218,7 +291,7 @@ export default function FinancialPage() {
         setLoading(false)
       }
     },
-    [token, loadParks, loadPeriods, loadPeriodDetails, selectedParkId, selectedPeriodId]
+    [token, loadParks, loadEmployees, loadPeriods, loadPeriodDetails, selectedParkId, selectedPeriodId]
   )
 
   useEffect(() => {
@@ -229,7 +302,15 @@ export default function FinancialPage() {
   useEffect(() => {
     if (!token) return
     const parkId = selectedParkId ? Number(selectedParkId) : null
-    if (!parkId) return
+    if (!parkId) {
+      setPeriods([])
+      setSelectedPeriodId("")
+      setSummary(null)
+      setServices([])
+      setPayments([])
+      setCarRental(null)
+      return
+    }
 
     const load = async () => {
       try {
@@ -246,7 +327,12 @@ export default function FinancialPage() {
   useEffect(() => {
     if (!token) return
     const periodId = selectedPeriodId ? Number(selectedPeriodId) : null
-    if (!periodId) return
+    if (!periodId) {
+      setSummary(null)
+      setServices([])
+      setPayments([])
+      return
+    }
 
     const load = async () => {
       try {
@@ -259,6 +345,32 @@ export default function FinancialPage() {
 
     load()
   }, [selectedPeriodId, token, loadPeriodDetails])
+
+  useEffect(() => {
+    if (paymentForm.category !== "EMPLOYEE_HELPER" && paymentForm.category !== "EMPLOYEE_LEADER") {
+      setPaymentForm((prev) => ({ ...prev, employeeId: "" }))
+    }
+  }, [paymentForm.category])
+
+  useEffect(() => {
+    if (editPaymentForm.category !== "EMPLOYEE_HELPER" && editPaymentForm.category !== "EMPLOYEE_LEADER") {
+      setEditPaymentForm((prev) => ({ ...prev, employeeId: "" }))
+    }
+  }, [editPaymentForm.category])
+
+  useEffect(() => {
+    if (!selectedPeriod) return
+    setServiceForm((prev) => ({ ...prev, unitPrice: selectedPeriod.jvaPricePerMeter }))
+    setEditServiceForm((prev) => ({ ...prev, unitPrice: selectedPeriod.jvaPricePerMeter }))
+  }, [selectedPeriod])
+
+  useEffect(() => {
+    if (paymentForm.category !== "CLIENT_PAYMENT") return
+    setPaymentForm((prev) => ({
+      ...prev,
+      clientCnpj: prev.clientCnpj || selectedPark?.client?.cnpj || "",
+    }))
+  }, [paymentForm.category, selectedPark])
 
   const handleCreatePeriod = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -290,6 +402,10 @@ export default function FinancialPage() {
   const handleAddService = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!token || !selectedPeriodId) return
+    if (requiresLeader && !serviceForm.leaderId) {
+      setError("Selecione um lider para esta competencia.")
+      return
+    }
 
     try {
       setError(null)
@@ -298,6 +414,7 @@ export default function FinancialPage() {
       await addService(token, Number(selectedPeriodId), {
         serviceType: serviceForm.serviceType,
         teamType: serviceForm.teamType,
+        leaderId: serviceForm.leaderId ? Number(serviceForm.leaderId) : undefined,
         meters: serviceForm.meters,
         unitPrice: serviceForm.unitPrice || undefined,
         notes: serviceForm.notes || undefined,
@@ -308,8 +425,9 @@ export default function FinancialPage() {
       setServiceForm({
         serviceType: "ASSEMBLY",
         teamType: "MONTAGEM",
+        leaderId: "",
         meters: 0,
-        unitPrice: 0,
+        unitPrice: selectedPeriod?.jvaPricePerMeter || 0,
         notes: "",
         startDate: "",
         endDate: "",
@@ -325,12 +443,18 @@ export default function FinancialPage() {
   const handleAddPayment = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!token || !selectedPeriodId) return
+    const requiresEmployee =
+      paymentForm.category === "EMPLOYEE_HELPER" || paymentForm.category === "EMPLOYEE_LEADER"
+    if (requiresEmployee && !paymentForm.employeeId) {
+      setError("Selecione o funcionario para esta categoria de pagamento.")
+      return
+    }
 
     try {
       setError(null)
       setMessage(null)
 
-      await addPayment(token, Number(selectedPeriodId), {
+      const created = await addPayment(token, Number(selectedPeriodId), {
         paymentDate: paymentForm.paymentDate,
         name: paymentForm.name,
         amount: paymentForm.amount,
@@ -338,7 +462,11 @@ export default function FinancialPage() {
         invoiceNumber: paymentForm.invoiceNumber || undefined,
         notes: paymentForm.notes || undefined,
         clientCnpj: paymentForm.clientCnpj || undefined,
+        employeeId: paymentForm.employeeId ? Number(paymentForm.employeeId) : undefined,
       })
+      if (paymentReceiptFile) {
+        await uploadPaymentReceipt(token, created.id, paymentReceiptFile)
+      }
 
       setPaymentForm((prev) => ({
         ...prev,
@@ -346,8 +474,10 @@ export default function FinancialPage() {
         amount: 0,
         invoiceNumber: "",
         notes: "",
+        employeeId: "",
       }))
-      setMessage("Pagamento registrado com sucesso.")
+      setPaymentReceiptFile(null)
+      setMessage(paymentReceiptFile ? "Pagamento e comprovante registrados com sucesso." : "Pagamento registrado com sucesso.")
       await loadPeriodDetails(Number(selectedPeriodId))
     } catch (err) {
       if (err instanceof ApiError) setError(err.message)
@@ -356,8 +486,8 @@ export default function FinancialPage() {
   }
 
   const startEditPeriod = () => {
-    if (!summary || !selectedPeriodId) return
-    const period = periods.find((p) => p.id === Number(selectedPeriodId))
+    if (!selectedPeriodId) return
+    const period = selectedPeriod
     if (!period) return
     setEditPeriodForm({
       jvaPricePerMeter: 0,
@@ -366,16 +496,10 @@ export default function FinancialPage() {
       carRentalValue: 0,
       status: period.status,
     })
-    // Load actual period data
     const loadForEdit = async () => {
       if (!token) return
       try {
-        const { default: fullPeriod } = { default: await (async () => {
-          const resp = await fetch(`${process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8080"}/financial/periods/${selectedPeriodId}`, {
-            headers: { Authorization: `Bearer ${token}` },
-          })
-          return resp.json()
-        })() }
+        const fullPeriod = await getPeriod(token, Number(selectedPeriodId))
         setEditPeriodForm({
           jvaPricePerMeter: fullPeriod.jvaPricePerMeter ?? 0,
           leaderPricePerMeter: fullPeriod.leaderPricePerMeter ?? 0,
@@ -383,7 +507,9 @@ export default function FinancialPage() {
           carRentalValue: fullPeriod.carRentalValue ?? 0,
           status: fullPeriod.status ?? "OPEN",
         })
-      } catch { /* ignore */ }
+      } catch {
+        // ignore
+      }
     }
     loadForEdit()
     setEditingPeriod(true)
@@ -436,6 +562,7 @@ export default function FinancialPage() {
     setEditServiceForm({
       serviceType: service.serviceType,
       teamType: service.teamType,
+      leaderId: service.leader?.id ? String(service.leader.id) : "",
       meters: service.meters,
       unitPrice: service.unitPrice,
       notes: service.notes || "",
@@ -447,12 +574,17 @@ export default function FinancialPage() {
   const handleUpdateService = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!token || !editingServiceId) return
+    if (requiresLeader && !editServiceForm.leaderId) {
+      setError("Selecione um lider para este servico.")
+      return
+    }
     try {
       setError(null)
       setMessage(null)
       await updateService(token, editingServiceId, {
         serviceType: editServiceForm.serviceType,
         teamType: editServiceForm.teamType,
+        leaderId: editServiceForm.leaderId ? Number(editServiceForm.leaderId) : 0,
         meters: editServiceForm.meters,
         unitPrice: editServiceForm.unitPrice || undefined,
         notes: editServiceForm.notes || undefined,
@@ -492,12 +624,21 @@ export default function FinancialPage() {
       category: payment.category,
       invoiceNumber: payment.invoiceNumber || "",
       notes: payment.notes || "",
+      employeeId: payment.employee?.id ? String(payment.employee.id) : "",
+      clientCnpj: payment.client?.cnpj || "",
     })
+    setEditPaymentReceiptFile(null)
   }
 
   const handleUpdatePayment = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!token || !editingPaymentId) return
+    const requiresEmployee =
+      editPaymentForm.category === "EMPLOYEE_HELPER" || editPaymentForm.category === "EMPLOYEE_LEADER"
+    if (requiresEmployee && !editPaymentForm.employeeId) {
+      setError("Selecione o funcionario para esta categoria de pagamento.")
+      return
+    }
     try {
       setError(null)
       setMessage(null)
@@ -508,9 +649,15 @@ export default function FinancialPage() {
         category: editPaymentForm.category,
         invoiceNumber: editPaymentForm.invoiceNumber || undefined,
         notes: editPaymentForm.notes || undefined,
+        employeeId: editPaymentForm.employeeId ? Number(editPaymentForm.employeeId) : undefined,
+        clientCnpj: editPaymentForm.clientCnpj || "",
       })
+      if (editPaymentReceiptFile) {
+        await uploadPaymentReceipt(token, editingPaymentId, editPaymentReceiptFile)
+      }
       setEditingPaymentId(null)
-      setMessage("Pagamento atualizado com sucesso.")
+      setEditPaymentReceiptFile(null)
+      setMessage(editPaymentReceiptFile ? "Pagamento e comprovante atualizados com sucesso." : "Pagamento atualizado com sucesso.")
       await loadPeriodDetails(Number(selectedPeriodId))
     } catch (err) {
       if (err instanceof ApiError) setError(err.message)
@@ -530,6 +677,25 @@ export default function FinancialPage() {
     } catch (err) {
       if (err instanceof ApiError) setError(err.message)
       else setError("Falha ao excluir pagamento.")
+    }
+  }
+
+  const handleDownloadReceipt = async (paymentId: number) => {
+    if (!token) return
+    try {
+      setError(null)
+      const { blob, fileName } = await downloadPaymentReceipt(token, paymentId)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement("a")
+      anchor.href = url
+      anchor.download = fileName
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message)
+      else setError("Falha ao baixar comprovante.")
     }
   }
 
@@ -562,6 +728,11 @@ export default function FinancialPage() {
             <Link href="/parks">
               <Button variant="ghost" size="sm">
                 Parques
+              </Button>
+            </Link>
+            <Link href="/employees">
+              <Button variant="ghost" size="sm">
+                Funcionarios
               </Button>
             </Link>
             <Button variant="ghost" size="sm" className="gap-2" onClick={reloadAll}>
@@ -624,7 +795,7 @@ export default function FinancialPage() {
               <option value="">Selecione uma competencia</option>
               {periods.map((period) => (
                 <option key={period.id} value={period.id}>
-                  {String(period.month).padStart(2, "0")}/{period.year} - {period.status}
+                  {String(period.month).padStart(2, "0")}/{period.year} - {STATUS_LABELS[period.status] || period.status}
                 </option>
               ))}
             </select>
@@ -659,8 +830,8 @@ export default function FinancialPage() {
                     <div className="space-y-1">
                       <Label>Status</Label>
                       <select className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={editPeriodForm.status} onChange={(e) => setEditPeriodForm((p) => ({ ...p, status: e.target.value as FinancialStatus }))}>
-                        <option value="OPEN">ABERTA</option>
-                        <option value="CLOSED">FECHADA</option>
+                        <option value="OPEN">Aberta</option>
+                        <option value="CLOSED">Fechada</option>
                       </select>
                     </div>
                     <div className="flex gap-2">
@@ -684,32 +855,144 @@ export default function FinancialPage() {
                 </Button>
               </div>
             )}
-            <div className="grid gap-4 md:grid-cols-3">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-muted-foreground">Receita Bruta</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-bold text-green-600">
-                {formatCurrency(summary.grossRevenue)}
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-muted-foreground">Custo Total</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-bold text-red-500">
-                {formatCurrency(summary.totalCost)}
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-muted-foreground">Lucro Liquido</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-bold text-foreground">
-                {formatCurrency(summary.netRevenue)}
-              </CardContent>
-            </Card>
+            <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm text-muted-foreground">Receita Bruta</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold text-green-600">
+                  {formatCurrency(summary.grossRevenue)}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm text-muted-foreground">Custo Total</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold text-red-500">
+                  {formatCurrency(summary.totalCost)}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm text-muted-foreground">Lucro Liquido</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold text-foreground">
+                  {formatCurrency(summary.netRevenue)}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm text-muted-foreground">Aluguel da Competencia</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold text-green-600">
+                  {formatCurrency(summary.carRentalValue)}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm text-muted-foreground">Aluguel no Ano</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold text-foreground">
+                  {formatCurrency(selectedYearCarRentalTotal)}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm text-muted-foreground">Aluguel Historico</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold text-foreground">
+                  {formatCurrency(carRental?.totalAllTime || 0)}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm text-muted-foreground">Recebido de Clientes</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold text-green-600">
+                  {formatCurrency(summary.clientPaymentsReceived)}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm text-muted-foreground">Pendente Cliente</CardTitle>
+                </CardHeader>
+                <CardContent className={`text-2xl font-bold ${summary.clientBalancePending > 0 ? "text-red-500" : "text-foreground"}`}>
+                  {formatCurrency(summary.clientBalancePending)}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm text-muted-foreground">Ganho Total Lideres</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold text-foreground">
+                  {formatCurrency(summary.leaderCost)}
+                </CardContent>
+              </Card>
             </div>
+
+            <Card className="mt-4">
+              <CardHeader>
+                <CardTitle className="text-base">Ganho por Lider na Competencia</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {summary.leaderEarnings.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    Nenhum lider alocado. Esta competencia foi executada sem custo de lider.
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-left text-muted-foreground">
+                          <th className="pb-2 font-medium">Lider</th>
+                          <th className="pb-2 font-medium text-right">Metros</th>
+                          <th className="pb-2 font-medium text-right">Valor m2</th>
+                          <th className="pb-2 font-medium text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {summary.leaderEarnings.map((item) => (
+                          <tr key={item.leaderId} className="border-b border-border last:border-0">
+                            <td className="py-2">{item.leaderName}</td>
+                            <td className="py-2 text-right">{item.totalMeters.toFixed(2)}</td>
+                            <td className="py-2 text-right">{formatCurrency(item.rateUsed)}</td>
+                            <td className="py-2 text-right font-medium">{formatCurrency(item.totalEarnings)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {carRental && carRental.monthlyTotals.length > 0 && (
+              <Card className="mt-4">
+                <CardHeader>
+                  <CardTitle className="text-base">Aluguel de Carro por Mes</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-left text-muted-foreground">
+                          <th className="pb-2 font-medium">Mes/Ano</th>
+                          <th className="pb-2 font-medium text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {carRental.monthlyTotals.map((item) => (
+                          <tr key={`${item.year}-${item.month}`} className="border-b border-border last:border-0">
+                            <td className="py-2">{String(item.month).padStart(2, "0")}/{item.year}</td>
+                            <td className="py-2 text-right font-medium">{formatCurrency(item.total)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </div>
         )}
 
@@ -831,10 +1114,10 @@ export default function FinancialPage() {
                       }))
                     }
                   >
-                    <option value="ASSEMBLY">MONTAGEM</option>
-                    <option value="DISASSEMBLY">DESMONTAGEM</option>
-                    <option value="MAINTENANCE">MANUTENCAO</option>
-                    <option value="OTHER">OUTRO</option>
+                    <option value="ASSEMBLY">Montagem</option>
+                    <option value="DISASSEMBLY">Desmontagem</option>
+                    <option value="MAINTENANCE">Manutenção</option>
+                    <option value="OTHER">Outro</option>
                   </select>
                 </div>
                 <div className="space-y-1">
@@ -846,6 +1129,24 @@ export default function FinancialPage() {
                     }
                     required
                   />
+                </div>
+                <div className="space-y-1">
+                  <Label>Líder {requiresLeader ? "(obrigatório)" : "(opcional)"}</Label>
+                  <select
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={serviceForm.leaderId}
+                    onChange={(event) =>
+                      setServiceForm((prev) => ({ ...prev, leaderId: event.target.value }))
+                    }
+                    required={requiresLeader}
+                  >
+                    <option value="">Selecione o lider</option>
+                    {leaders.map((leader) => (
+                      <option key={leader.id} value={leader.id}>
+                        {leader.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="grid gap-3 grid-cols-2">
                   <div className="space-y-1">
@@ -865,13 +1166,8 @@ export default function FinancialPage() {
                     <Input
                       type="number"
                       step="0.01"
-                      value={serviceForm.unitPrice}
-                      onChange={(event) =>
-                        setServiceForm((prev) => ({
-                          ...prev,
-                          unitPrice: Number(event.target.value),
-                        }))
-                      }
+                      value={selectedPeriod?.jvaPricePerMeter ?? serviceForm.unitPrice}
+                      readOnly
                     />
                   </div>
                 </div>
@@ -966,14 +1262,40 @@ export default function FinancialPage() {
                         }))
                       }
                     >
-                      <option value="OTHER">OUTRO</option>
-                      <option value="EMPLOYEE_HELPER">AJUDANTE</option>
-                      <option value="EMPLOYEE_LEADER">LIDER</option>
-                      <option value="TAX">IMPOSTO</option>
-                      <option value="CAR_RENTAL">ALUGUEL_CARRO</option>
+                      <option value="CLIENT_PAYMENT">Pagamento Cliente</option>
+                      <option value="OTHER">Outro</option>
+                      <option value="EMPLOYEE_HELPER">Ajudante</option>
+                      <option value="EMPLOYEE_LEADER">Líder</option>
+                      <option value="TAX">Imposto</option>
+                      <option value="CAR_RENTAL">Aluguel Carro</option>
                     </select>
                   </div>
                 </div>
+                {paymentForm.category === "CLIENT_PAYMENT" && (
+                  <p className="text-xs text-muted-foreground">
+                    Este registro entra como recebimento do cliente da competência.
+                  </p>
+                )}
+                {(paymentForm.category === "EMPLOYEE_HELPER" || paymentForm.category === "EMPLOYEE_LEADER") && (
+                  <div className="space-y-1">
+                    <Label>Funcionário</Label>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      value={paymentForm.employeeId}
+                      onChange={(event) =>
+                        setPaymentForm((prev) => ({ ...prev, employeeId: event.target.value }))
+                      }
+                      required
+                    >
+                      <option value="">Selecione o funcionario</option>
+                      {paymentEmployeeOptions.map((employee) => (
+                        <option key={employee.id} value={employee.id}>
+                          {employee.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="space-y-1">
                   <Label>Numero da nota</Label>
                   <Input
@@ -984,12 +1306,21 @@ export default function FinancialPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label>CNPJ do cliente (opcional)</Label>
+                  <Label>CNPJ do cliente {paymentForm.category === "CLIENT_PAYMENT" ? "(obrigatorio)" : "(opcional)"}</Label>
                   <Input
                     value={paymentForm.clientCnpj}
                     onChange={(event) =>
                       setPaymentForm((prev) => ({ ...prev, clientCnpj: event.target.value }))
                     }
+                    required={paymentForm.category === "CLIENT_PAYMENT"}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Comprovante (PDF ou imagem)</Label>
+                  <Input
+                    type="file"
+                    accept=".pdf,image/*"
+                    onChange={(event) => setPaymentReceiptFile(event.target.files?.[0] || null)}
                   />
                 </div>
                 <div className="space-y-1">
@@ -1028,16 +1359,24 @@ export default function FinancialPage() {
                         <form className="space-y-2" onSubmit={handleUpdateService}>
                           <div className="grid gap-2 grid-cols-2">
                             <select className="h-9 rounded-md border border-input bg-background px-2 text-sm" value={editServiceForm.serviceType} onChange={(e) => setEditServiceForm((p) => ({ ...p, serviceType: e.target.value as ServiceType }))}>
-                              <option value="ASSEMBLY">MONTAGEM</option>
-                              <option value="DISASSEMBLY">DESMONTAGEM</option>
-                              <option value="MAINTENANCE">MANUTENCAO</option>
-                              <option value="OTHER">OUTRO</option>
+                              <option value="ASSEMBLY">Montagem</option>
+                              <option value="DISASSEMBLY">Desmontagem</option>
+                              <option value="MAINTENANCE">Manutenção</option>
+                              <option value="OTHER">Outro</option>
                             </select>
                             <Input className="h-9" value={editServiceForm.teamType} onChange={(e) => setEditServiceForm((p) => ({ ...p, teamType: e.target.value }))} placeholder="Equipe" />
                           </div>
+                          <select className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm" value={editServiceForm.leaderId} onChange={(e) => setEditServiceForm((p) => ({ ...p, leaderId: e.target.value }))} required={requiresLeader}>
+                            <option value="">Selecione o lider</option>
+                            {leaders.map((leader) => (
+                              <option key={leader.id} value={leader.id}>
+                                {leader.name}
+                              </option>
+                            ))}
+                          </select>
                           <div className="grid gap-2 grid-cols-2">
                             <Input className="h-9" type="number" step="0.01" value={editServiceForm.meters} onChange={(e) => setEditServiceForm((p) => ({ ...p, meters: Number(e.target.value) }))} placeholder="Metros" />
-                            <Input className="h-9" type="number" step="0.01" value={editServiceForm.unitPrice} onChange={(e) => setEditServiceForm((p) => ({ ...p, unitPrice: Number(e.target.value) }))} placeholder="Valor un." />
+                            <Input className="h-9" type="number" step="0.01" value={selectedPeriod?.jvaPricePerMeter ?? editServiceForm.unitPrice} placeholder="Valor un." readOnly />
                           </div>
                           <div className="grid gap-2 grid-cols-2">
                             <Input className="h-9" type="date" value={editServiceForm.startDate} onChange={(e) => setEditServiceForm((p) => ({ ...p, startDate: e.target.value }))} />
@@ -1055,7 +1394,7 @@ export default function FinancialPage() {
                         <div className="flex items-start justify-between">
                           <div>
                             <p className="font-medium text-foreground">
-                              {service.teamType} - {service.serviceType}
+                              {service.teamType} - {SERVICE_TYPE_LABELS[service.serviceType] || service.serviceType}
                             </p>
                             <p className="text-sm text-muted-foreground">
                               {service.meters} m2 | {formatCurrency(service.grossValue)}
@@ -1066,6 +1405,9 @@ export default function FinancialPage() {
                                 {service.endDate ? formatDate(service.endDate) : "--"}
                               </p>
                             )}
+                            <p className="text-xs text-muted-foreground">
+                              Lider: {service.leader?.name || "Dono da JVA"}
+                            </p>
                           </div>
                           <div className="flex gap-1 shrink-0">
                             <Button size="sm" variant="ghost" onClick={() => startEditService(service)} title="Editar">
@@ -1106,14 +1448,27 @@ export default function FinancialPage() {
                           <div className="grid gap-2 grid-cols-2">
                             <Input className="h-9" type="number" step="0.01" value={editPaymentForm.amount} onChange={(e) => setEditPaymentForm((p) => ({ ...p, amount: Number(e.target.value) }))} required />
                             <select className="h-9 rounded-md border border-input bg-background px-2 text-sm" value={editPaymentForm.category} onChange={(e) => setEditPaymentForm((p) => ({ ...p, category: e.target.value as PaymentCategory }))}>
-                              <option value="OTHER">OUTRO</option>
-                              <option value="EMPLOYEE_HELPER">AJUDANTE</option>
-                              <option value="EMPLOYEE_LEADER">LIDER</option>
-                              <option value="TAX">IMPOSTO</option>
-                              <option value="CAR_RENTAL">ALUGUEL_CARRO</option>
+                              <option value="CLIENT_PAYMENT">Pagamento Cliente</option>
+                              <option value="OTHER">Outro</option>
+                              <option value="EMPLOYEE_HELPER">Ajudante</option>
+                              <option value="EMPLOYEE_LEADER">Líder</option>
+                              <option value="TAX">Imposto</option>
+                              <option value="CAR_RENTAL">Aluguel Carro</option>
                             </select>
                           </div>
+                          {(editPaymentForm.category === "EMPLOYEE_HELPER" || editPaymentForm.category === "EMPLOYEE_LEADER") && (
+                            <select className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm" value={editPaymentForm.employeeId} onChange={(e) => setEditPaymentForm((p) => ({ ...p, employeeId: e.target.value }))} required>
+                              <option value="">Selecione o funcionario</option>
+                              {editPaymentEmployeeOptions.map((employee) => (
+                                <option key={employee.id} value={employee.id}>
+                                  {employee.name}
+                                </option>
+                              ))}
+                            </select>
+                          )}
                           <Input className="h-9" value={editPaymentForm.invoiceNumber} onChange={(e) => setEditPaymentForm((p) => ({ ...p, invoiceNumber: e.target.value }))} placeholder="Numero da nota" />
+                          <Input className="h-9" value={editPaymentForm.clientCnpj} onChange={(e) => setEditPaymentForm((p) => ({ ...p, clientCnpj: e.target.value }))} placeholder="CNPJ do cliente" required={editPaymentForm.category === "CLIENT_PAYMENT"} />
+                          <Input className="h-9" type="file" accept=".pdf,image/*" onChange={(e) => setEditPaymentReceiptFile(e.target.files?.[0] || null)} />
                           <Input className="h-9" value={editPaymentForm.notes} onChange={(e) => setEditPaymentForm((p) => ({ ...p, notes: e.target.value }))} placeholder="Observacao" />
                           <div className="flex gap-2">
                             <Button type="submit" size="sm">Salvar</Button>
@@ -1126,16 +1481,29 @@ export default function FinancialPage() {
                         <div className="flex items-start justify-between">
                           <div>
                             <p className="font-medium text-foreground">
-                              {payment.name} - {payment.category}
+                              {payment.name} - {PAYMENT_CATEGORY_LABELS[payment.category] || payment.category}
                             </p>
                             <p className="text-sm text-muted-foreground">
                               {formatDate(payment.paymentDate)} | {formatCurrency(payment.amount)}
                             </p>
+                            {payment.client && (
+                              <p className="text-xs text-muted-foreground">
+                                Cliente: {payment.client.name} ({payment.client.cnpj})
+                              </p>
+                            )}
+                            {payment.employee && (
+                              <p className="text-xs text-muted-foreground">Funcionario: {payment.employee.name}</p>
+                            )}
                             {payment.notes && (
                               <p className="text-xs text-muted-foreground">{payment.notes}</p>
                             )}
                           </div>
                           <div className="flex gap-1 shrink-0">
+                            {payment.hasReceipt && (
+                              <Button size="sm" variant="ghost" onClick={() => handleDownloadReceipt(payment.id)} title="Baixar comprovante">
+                                Baixar
+                              </Button>
+                            )}
                             <Button size="sm" variant="ghost" onClick={() => startEditPayment(payment)} title="Editar">
                               <Pencil className="h-4 w-4" />
                             </Button>
